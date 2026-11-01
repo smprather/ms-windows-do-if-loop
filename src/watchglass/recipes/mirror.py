@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from watchglass.ctx import CommandFailed, Ctx, Unknown
-from watchglass.recipes import file_budget
+from watchglass.recipes import Failures, file_budget
 from watchglass.recipes.pull import cleanup_parts
 from watchglass.remote import ssh_argv, ssh_run_argv, watcher_source
 from watchglass.transfer import TransferAuthFailed, TransferFailed, with_known_hosts
@@ -528,8 +528,9 @@ def _resumable_push(
 def on_true_push(ctx: Ctx) -> None:
     """Push the plan: directories, then each changed file, then deletions, promoting the checkpoint as work lands.
 
-    A file that fails is logged and the rest of the plan carries on; the first failure is raised at the end, and
-    its entry stays out of the checkpoint, so the next poll tries it again.
+    A file that fails is logged and the rest of the plan carries on; the first transient failure is raised at the
+    end (a rejection outranks it and is raised instead), and its entry stays out of the checkpoint, so the next
+    poll tries it again.
     """
     settings = ctx.settings
     plan = Plan.from_payload(ctx.payload or {})
@@ -540,7 +541,7 @@ def on_true_push(ctx: Ctx) -> None:
     options = transfer_options(settings)
     resumable = bool(settings["resume"])
     landed: list[tuple[str, int]] = []
-    error: Exception | None = None
+    failures = Failures()
 
     def promote(force: bool = False) -> None:
         if force or should_promote(landed):
@@ -562,7 +563,7 @@ def on_true_push(ctx: Ctx) -> None:
                     _remote_remove(ctx, settings, uploading_path(settings, relative))
                 continue  # gone since the check
             if ctx.remaining <= 0:
-                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                failures.note(TransferFailed("no time left for the rest of this queue (raise action_timeout)"))
                 break
             budget = file_budget(ctx.remaining, len(plan.copy) - index, settings["file_timeout"])
             try:
@@ -582,7 +583,7 @@ def on_true_push(ctx: Ctx) -> None:
             except (CommandFailed, TransferFailed, OSError) as exc:
                 if isinstance(exc, CommandFailed) and exc.permanent_reason:
                     raise  # a rejected login from the remote helper: park instead of trying the next file
-                error = error or exc
+                failures.note(exc)
                 ctx.log.warning("pushing %s failed (%s); the rest of the queue is still tried", relative, exc)
                 continue
             if not finalized:
@@ -621,10 +622,9 @@ def on_true_push(ctx: Ctx) -> None:
                 dirs.discard(relative)
             promote()
     except Exception as exc:
-        error = error or exc
+        failures.note(exc)
     promote(force=True)
-    if error is not None:
-        raise error
+    failures.raise_if_any()
 
 
 def on_true_pull(ctx: Ctx) -> None:
@@ -645,7 +645,7 @@ def on_true_pull(ctx: Ctx) -> None:
     options = transfer_options(settings)
     local = Path(settings["local_dir"])
     pending: list[tuple[str, int]] = []
-    error: Exception | None = None
+    failures = Failures()
     pulled = 0
 
     def promote(force: bool = False) -> None:
@@ -658,7 +658,7 @@ def on_true_pull(ctx: Ctx) -> None:
             try:
                 (local / relative).mkdir(parents=True, exist_ok=True)
             except OSError as exc:
-                error = error or exc
+                failures.note(exc)
                 ctx.log.warning("cannot create %s (%s)", local / relative, exc)
                 continue
             dirs.add(relative)
@@ -666,7 +666,7 @@ def on_true_pull(ctx: Ctx) -> None:
             promote()
         for index, relative in enumerate(plan.copy):
             if ctx.remaining <= 0:
-                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                failures.note(TransferFailed("no time left for the rest of this queue (raise action_timeout)"))
                 break
             budget = file_budget(ctx.remaining, len(plan.copy) - index, settings["file_timeout"])
             try:
@@ -681,7 +681,7 @@ def on_true_pull(ctx: Ctx) -> None:
             except TransferAuthFailed:
                 raise  # permanent: repeating it for the rest of the queue would only burn lockout budget
             except (CommandFailed, TransferFailed, OSError) as exc:
-                error = error or exc
+                failures.note(exc)
                 ctx.log.warning("pulling %s failed (%s); the rest of the queue is still tried", relative, exc)
                 continue
             files[relative] = [info.st_size, info.st_mtime]
@@ -699,7 +699,7 @@ def on_true_pull(ctx: Ctx) -> None:
                     try:
                         (local / relative).unlink(missing_ok=True)
                     except OSError as exc:
-                        error = error or exc
+                        failures.note(exc)
                         ctx.log.warning("cannot delete %s (%s)", local / relative, exc)
                 for relative in sorted(lost_dirs, key=lambda path: (-_depth(path), path)):
                     try:
@@ -710,10 +710,9 @@ def on_true_pull(ctx: Ctx) -> None:
         if pulled:
             cleanup_parts(ctx, local, settings["part_max_age"])
     except Exception as exc:
-        error = error or exc
+        failures.note(exc)
     promote(force=True)
-    if error is not None:
-        raise error
+    failures.raise_if_any()
 
 
 def _repair_mtime(ctx: Ctx, path: Path, wanted: float | None, tolerance: float) -> os.stat_result:

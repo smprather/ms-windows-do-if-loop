@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from watchglass.ctx import CommandFailed, Ctx, Unknown
-from watchglass.recipes import file_budget
+from watchglass.recipes import Failures, file_budget
 from watchglass.transfer import TransferAuthFailed, TransferFailed, format_bytes, parse_endpoint
 
 LEDGER = "pushed"
@@ -99,7 +99,7 @@ def on_true(ctx: Ctx) -> None:
     options = transfer_options(settings)
     pushed = ctx.ledger(LEDGER)
     files = [Path(name) for name in ctx.payload]
-    error: Exception | None = None
+    failures = Failures()
     try:
         if files:
             ctx.event(f"pushing {len(files)} file(s) to {settings['dest']}", count=len(files), dest=settings["dest"])
@@ -110,7 +110,7 @@ def on_true(ctx: Ctx) -> None:
             if settings["after"] == "keep" and key in pushed:
                 continue
             if ctx.remaining <= 0:
-                error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                failures.note(TransferFailed("no time left for the rest of this queue (raise action_timeout)"))
                 break
             # A fair share of what is left, so one slow upload cannot starve the rest of the queue
             # (`file_timeout` caps it harder). A file that fails or runs out of its share is logged, and the
@@ -126,7 +126,7 @@ def on_true(ctx: Ctx) -> None:
                 # same failed login (and burn lockout budget). Let the scheduler park the watch at once.
                 raise
             except (TransferFailed, CommandFailed, OSError) as exc:
-                error = error or exc
+                failures.note(exc)
                 ctx.event(f"pushing {path.name} failed ({exc}); the rest of the queue is still tried",
                           level="WARNING", name=path.name, dest=settings["dest"])
                 continue
@@ -143,6 +143,5 @@ def on_true(ctx: Ctx) -> None:
             else:
                 pushed.add(key)
     except Exception as exc:
-        error = error or exc
-    if error is not None:
-        raise error
+        failures.note(exc)
+    failures.raise_if_any()

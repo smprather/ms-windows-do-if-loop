@@ -54,7 +54,9 @@ nonzero it is not restarted and the watch is parked, so a `remote_files` source 
 A larger `max_auth_failures` tolerates that many consecutive rejections from hooks first; an observer's first
 rejection parks the watch as soon as the limit is nonzero (it cannot keep trying without repeating the login).
 An ordinary failure in between does not reset the count; a poll that succeeds does. The recipes stop their queue
-at the first rejection rather than trying the remaining files, so one poll costs one login attempt. In watch code,
+at the first rejection rather than trying the remaining files, so one poll costs one login attempt. A rejection
+also outranks any transient failure the same queue met earlier: the poll reports the rejection, so the watch
+parks instead of backing off, whatever order the files failed in. In watch code,
 `ctx.transfer` raises `watchglass.transfer.TransferAuthFailed` (a `TransferFailed`) and `ctx.run` raises
 `CommandFailed` with its `permanent_reason` set; command hooks are classified from the same stderr shapes.
 

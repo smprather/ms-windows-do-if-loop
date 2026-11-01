@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from watchglass.ctx import CommandFailed, Ctx, as_text
-from watchglass.recipes import file_budget
+from watchglass.recipes import Failures, file_budget
 from watchglass.remote import ssh_argv, watcher_source
 from watchglass.transfer import (
     TransferAuthFailed,
@@ -199,7 +199,7 @@ def on_true(ctx: Ctx) -> None:
     options = transfer_options(settings)
     fresh: list[str] = []
     pulled_now = 0
-    error: Exception | None = None
+    failures = Failures()
     try:
         items = [item for item in ctx.payload if item["key"] not in pulled and item["key"] not in skipped]
         # One ledger rewrite for the whole queue instead of one per file: "pulled" only grows, so saving per
@@ -210,7 +210,7 @@ def on_true(ctx: Ctx) -> None:
                     ledgers.enter_context(ledger.batch())
             for index, item in enumerate(items):
                 if ctx.remaining <= 0:
-                    error = error or TransferFailed("no time left for the rest of this queue (raise action_timeout)")
+                    failures.note(TransferFailed("no time left for the rest of this queue (raise action_timeout)"))
                     break
                 sha256 = item["sha256"] if settings["checksum"] else None
                 # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
@@ -254,7 +254,7 @@ def on_true(ctx: Ctx) -> None:
                     # The producer withdrew the file between the report and this pull: a permanent condition for
                     # this event, so retrying it would fail forever and starve the real queue behind it (issue 14).
                     if settings["on_missing"] == "fail":
-                        error = error or exc
+                        failures.note(exc)
                         ctx.event(f"pulling {item['name']} from {settings['remote']} failed ({exc}); "
                                   "the rest of the queue is still tried",
                                   level="WARNING", name=item["name"], remote=settings["remote"])
@@ -268,7 +268,7 @@ def on_true(ctx: Ctx) -> None:
                                   level="WARNING", name=item["name"], remote=settings["remote"])
                     continue
                 except (TransferFailed, CommandFailed, OSError) as exc:
-                    error = error or exc
+                    failures.note(exc)
                     ctx.event(f"pulling {item['name']} from {settings['remote']} failed ({exc}); "
                               "the rest of the queue is still tried",
                               level="WARNING", name=item["name"], remote=settings["remote"])
@@ -285,14 +285,14 @@ def on_true(ctx: Ctx) -> None:
         if pulled_now:
             cleanup_parts(ctx, Path(settings["local_dir"]), settings["part_max_age"])
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them
-        error = error or exc
-    if queue is not None and (fresh or error is None):
-        entries = set(fresh) if error is not None else set(fresh) | set(due_deletions(ctx))
+        failures.note(exc)
+    if queue is not None and (fresh or not failures):
+        entries = set(fresh) if failures else set(fresh) | set(due_deletions(ctx))
         try:
             delete_remote(ctx, sorted(entries))
         except Exception as exc:
-            if error is None:
+            if not failures:
                 raise
+            failures.note(exc)
             ctx.log.warning("deleting from %s failed as well: %s", settings["remote"], exc)
-    if error is not None:
-        raise error
+    failures.raise_if_any()
