@@ -223,6 +223,14 @@ def _watch_crash(record: dict[str, Any], level: int) -> str:
     return line
 
 
+def _watch_poked(record: dict[str, Any], level: int) -> str:
+    return "poked: polling now"
+
+
+def _watch_poke_ignored(record: dict[str, Any], level: int) -> str:
+    return f"poke ignored: {record.get('reason')}"
+
+
 def _alert_end(record: dict[str, Any], level: int) -> str:
     line = f"alert_command ({record.get('alert_event')}) → {record.get('status')} ({record.get('duration', 0):.2f}s)"
     if record.get("reason"):
@@ -313,6 +321,8 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any], int], str]] = {
     "watch.removed": _watch_removed,
     "watch.offline": _watch_offline,
     "watch.online": _watch_online,
+    "watch.poked": _watch_poked,
+    "watch.poke_ignored": _watch_poke_ignored,
     "watch.crash": _watch_crash,
     "observer.started": _observer_started,
     "observer.connected": _observer_connected,
@@ -358,7 +368,7 @@ def record_level(record: dict[str, Any]) -> int:
     if event == "observer.stopped":
         return NORMAL if record.get("reason") == "stopped" else QUIET
     if event in ("service.start", "service.stop", "config.loaded", "watch.added", "watch.changed",
-                 "watch.removed", "observer.started", "observer.connected", "observer.restarting"):
+                 "watch.removed", "watch.poked", "observer.started", "observer.connected", "observer.restarting"):
         return NORMAL
     return VERBOSE
 

@@ -58,6 +58,47 @@ def test_polls_immediately_then_after_the_interval(make_watch, runner_for):
     assert report is not None and report.before.condition is True
 
 
+def test_poke_polls_before_the_interval(make_watch, runner_for):
+    watch_dir = make_watch("w", config='interval = "60s"\n[hooks]\ncheck = ["true"]\n')
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    runner.poll_once(clock())
+    assert runner.seconds_until_due(clock()) == 60
+    assert runner.poke() is None
+    assert runner.seconds_until_due(clock()) == 0
+    assert runner.poll_once(clock()) is not None
+    assert runner.seconds_until_due(clock()) == 60
+
+
+def test_poke_turns_an_offline_watch_into_a_trial_poll(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='max_failures = 1\n[hooks]\ncheck = "exit 9"\n')
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    runner.poll_once(clock())
+    assert read_offline(xdg, "w") is not None
+    assert runner.seconds_until_due(clock()) is None
+    assert runner.poke() is None
+    report = runner.poll_once(clock())
+    assert report is not None and report.trial is True
+
+
+def test_poke_refuses_a_parked_watch(make_watch, runner_for):
+    watch_dir = make_watch("w", config='enabled = false\n[hooks]\ncheck = ["true"]\n')
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    assert "disabled" in runner.poke()
+    assert runner.poll_once(clock()) is None
+
+
+def test_poke_refuses_a_permanently_offline_watch(xdg, make_watch, runner_for):
+    watch_dir = make_watch("w", config='[hooks]\ncheck = ["true"]\n')
+    write_offline(xdg, "w", OfflineMarker(reason="authentication failed", since=iso_time(1_000_000.0), permanent=True))
+    clock = Clock()
+    runner = runner_for(watch_dir, [], [], clock)
+    assert "authentication failed" in runner.poke()
+    assert runner.poll_once(clock()) is None
+
+
 def test_backoff_then_offline(xdg, make_watch, runner_for):
     watch_dir = make_watch("w", config='interval = "10s"\nmax_failures = 2\n[hooks]\ncheck = "exit 9"\n')
     clock, records, alerts = Clock(), [], []

@@ -38,14 +38,14 @@ from watchglass.config import (
     load_global_config,
     load_watch_config,
 )
-from watchglass.control import ControlError, disable_watch, enable_watch, rename_watch, require_known
+from watchglass.control import ControlError, disable_watch, enable_watch, poke_watch, rename_watch, require_known
 from watchglass.ctx import CommandFailed
 from watchglass.durations import DurationError, parse_duration
 from watchglass.locks import LockBusy, hold_lock
 from watchglass.logquery import LogFilter, follow_log, parse_when, select_records
 from watchglass.logstore import LogWriter, QueueSink, fan_out, level_filter, make_record
 from watchglass.observers import build_observer, stop_all
-from watchglass.offline import iso_time
+from watchglass.offline import iso_time, read_offline
 from watchglass.output import NORMAL, VERBOSE, ConsolePrinter, make_console, plain_output, use_utf8_output
 from watchglass.paths import PathError, Paths, ensure_private_dir, remove_stale_process_dirs, resolve_paths
 from watchglass.pollengine import Fake, PollEngine, PollReport, parse_fakes
@@ -62,7 +62,7 @@ COMMAND_GROUPS = {
         {"name": "Run", "commands": ["run", "stop"]},
         {"name": "Develop", "commands": ["new", "validate", "poll", "observe"]},
         {"name": "Inspect", "commands": ["status", "logs", "tui"]},
-        {"name": "Control", "commands": ["enable", "disable", "rename"]},
+        {"name": "Control", "commands": ["enable", "disable", "poke", "rename"]},
         {"name": "Setup", "commands": ["init", "install", "uninstall"]},
         {"name": "Hook tools", "commands": ["kit"]},
         {"name": "Reference", "commands": ["docs"]},
@@ -641,6 +641,40 @@ def disable(app: App, name: str) -> None:
 
 
 @cli.command()
+@click.argument("name")
+@click.pass_obj
+def poke(app: App, name: str) -> None:
+    """Ask the running service to poll NAME now instead of waiting for its next scheduled poll.
+
+    The request is a file the service reads within a second, so it works on every OS. A watch that is
+    disabled (`enabled = false`, or `watchglass disable`) or parked by a rejected credential is not
+    polled: fix that first. A watch offline after ordinary failures is polled as a trial. The poll
+    itself is logged as usual; `watch.poked` comes first.
+
+    Exit status: 0 when the request is accepted, 1 if no service is running, NAME is unknown, or the
+    watch will not poll.
+    """
+    discovery = _control_setup(app)
+    try:
+        require_known(app.paths, discovery, name)
+    except ControlError as exc:
+        _fail(str(exc))
+    if not service_running(app.paths):
+        _fail(f"no watchglass service is running; use `watchglass poll {name}` for a one-off poll")
+    _, watch = _load_one(app, name)
+    if not watch.enabled:
+        _fail(f"{name} is disabled (enabled = false); nothing to poke")
+    marker = read_offline(app.paths, name)
+    if marker is not None:
+        if marker.by_user:
+            _fail(f"{name} is disabled; run `watchglass enable {name}` first")
+        if marker.permanent:
+            _fail(f"{name} is offline: {marker.reason}")
+    poke_watch(app.paths, name)
+    click.echo(f"{name} poked; the service polls it within a second")
+
+
+@cli.command()
 @click.argument("old")
 @click.argument("new")
 @click.pass_obj
@@ -919,10 +953,11 @@ def docs(topic: str | None, show_all: bool) -> None:
 def tui(app: App) -> None:
     """Watch the service live: every watch, its next poll, and the actions it takes.
 
-    Read-only: it never enables, disables or polls anything, and it writes nothing, so it is safe beside a
-    running service (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's
-    records, `v` cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `r` re-reads the
-    config, q quits.
+    Mostly read-only: it never enables or disables a watch and writes no watchglass state, but `p` asks the
+    running service to poll the selected watch now (one request file). It is safe beside a running service
+    (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's records, `v`
+    cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `p` pokes the selected
+    watch, `r` re-reads the config, q quits.
 
     Needs a terminal: when stdout is not one, use `watchglass status` or `watchglass logs --json` instead.
 

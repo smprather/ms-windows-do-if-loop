@@ -1,8 +1,9 @@
-"""watchglass enable / disable / rename: control through files the service reads."""
+"""watchglass enable / disable / poke / rename: control through files the service reads."""
 
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from watchglass.config import Discovery, WatchNotFound, find_watch, is_valid_watch_name
@@ -51,6 +52,17 @@ def disable_watch(paths: Paths, name: str, now: float) -> bool:
         return False
     write_offline(paths, name, OfflineMarker(reason="disabled by user", since=iso_time(now), by_user=True))
     return True
+
+
+def poke_watch(paths: Paths, name: str) -> None:
+    """Ask the running service to poll NAME now. A request for a watch the service does not run is logged.
+
+    The request is one file per watch (`runtime/poke/<name>`): a second poke before the service reads it
+    coalesces into one poll, which is what the caller wants anyway.
+    """
+    request = paths.poke_request(name)
+    request.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    request.write_text(str(time.time()), encoding="utf-8")
 
 
 def rename_watch(paths: Paths, discovery: Discovery, old: str, new: str) -> tuple[Path, Path]:

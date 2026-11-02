@@ -163,6 +163,37 @@ def test_tick_survives_errors(xdg, make_watch, monkeypatch):
     assert len(events(records, "service.error")) == 2
 
 
+def test_a_poke_request_forces_the_next_poll_and_is_consumed(xdg, make_watch):
+    from watchglass.control import poke_watch
+
+    make_watch("a", config='interval = "60s"\n[hooks]\ncheck = ["true"]\n')
+    records = []
+    service = make_service(xdg, records)
+    service.start()
+    runner = service.runners["a"]
+    assert runner.poll_once(time.time()) is not None
+    assert runner.seconds_until_due(time.time()) > 0
+    poke_watch(xdg, "a")
+    service.tick()
+    assert not xdg.poke_request("a").exists()
+    assert runner.seconds_until_due(time.time()) == 0
+    assert [r["watch"] for r in events(records, "watch.poked")] == ["a"]
+
+
+def test_a_poke_request_for_an_unknown_watch_is_consumed_and_logged(xdg, make_watch):
+    from watchglass.control import poke_watch
+
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    records = []
+    service = make_service(xdg, records)
+    service.start()
+    poke_watch(xdg, "gone")
+    service.tick()
+    assert not xdg.poke_request("gone").exists()
+    (ignored,) = events(records, "watch.poke_ignored")
+    assert ignored["watch"] == "gone" and ignored["level"] == "WARNING"
+
+
 def test_stop_request_file_stops_the_service(xdg, make_watch):
     make_watch("a", config='[hooks]\ncheck = ["true"]\n')
     records = []

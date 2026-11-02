@@ -6,7 +6,7 @@ watchglass runs *watches*: small directories holding a `config.toml` plus a chec
 
 Watches can also react to events instead of polling: observers keep commands, local directories or remote directories (over one ssh connection, with nothing installed remotely) under watch. Built-in recipes move files between machines with verified scp transfers, and `recipe = "mirror"` keeps a whole tree in sync in place, the way rsync would; `watchglass docs relay` walks through relaying files host A → this machine → host B.
 
-`watchglass tui` watches all of it live in one screen: every watch and its state, the countdown to its next poll, and the actions it has taken with their results. It is read-only, so it is safe to leave open beside the running service.
+`watchglass tui` watches all of it live in one screen: every watch and its state, the countdown to its next poll, and the actions it has taken with their results. Its only write is a poke request (`p`), so it is safe to leave open beside the running service.
 
 ## Install
 
@@ -47,7 +47,7 @@ See `watchglass docs storage` for the paths.
 ## Learn more
 
 ```sh
-watchglass tui            # a live view of every watch (read-only)
+watchglass tui            # a live view of every watch (`p` pokes a watch)
 watchglass docs           # list the reference topics
 watchglass docs agent     # the contract for writing a watch (start here)
 watchglass docs --all     # everything

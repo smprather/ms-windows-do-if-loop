@@ -40,9 +40,39 @@ def test_a_name_that_is_a_path_is_refused(xdg, make_watch):
     assert not (xdg.state_home / "offline.json").exists()
 
 
+def test_poke_asks_a_running_service_to_poll_now(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    ensure_private_dir(xdg.runtime)
+    with hold_lock(xdg.service_lock):
+        result = run("poke", "a")
+    assert result.exit_code == 0, result.output
+    assert "a poked" in result.output
+    assert xdg.poke_request("a").is_file()
+
+
+def test_poke_without_a_service_says_how_to_poll_once(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    result = run("poke", "a")
+    assert result.exit_code == 1
+    assert "no watchglass service is running" in result.output
+    assert "watchglass poll a" in result.output
+    assert not xdg.poke_request("a").exists()
+
+
+def test_poke_refuses_a_watch_the_user_disabled(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    run("disable", "a")
+    ensure_private_dir(xdg.runtime)
+    with hold_lock(xdg.service_lock):
+        result = run("poke", "a")
+    assert result.exit_code == 1
+    assert "disabled" in result.output
+    assert not xdg.poke_request("a").exists()
+
+
 def test_unknown_names(xdg, make_watch):
     make_watch("psg-export", config='[hooks]\ncheck = ["true"]\n')
-    for command in ("enable", "disable"):
+    for command in ("enable", "disable", "poke"):
         result = run(command, "psg-exprot")
         assert result.exit_code == 1 and "did you mean 'psg-export'" in result.output
 
@@ -79,5 +109,5 @@ def test_help_shows_every_panel(xdg):
     output = run("--help").output
     for panel in ("Run", "Develop", "Inspect", "Control"):
         assert panel in output
-    for command in ("run", "validate", "poll", "status", "logs", "enable", "disable", "rename"):
+    for command in ("run", "validate", "poll", "status", "logs", "enable", "disable", "poke", "rename"):
         assert f" {command} " in output

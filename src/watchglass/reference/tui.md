@@ -1,10 +1,10 @@
 # The terminal monitor (`watchglass tui`)
 
-`watchglass tui` is a live, read-only view of what the service is doing: every watch with its state and how long
+`watchglass tui` is a live view of what the service is doing: every watch with its state and how long
 until its next poll, and the stream of actions with their results. It reads `status.json` once a second and
-follows the log file. It writes nothing of watchglass's own - the only thing it touches is the service lock file
-it opens to ask whether the service is running - so it is safe beside a running service, and several monitors may
-run at once.
+follows the log file. Its only write is a poke request - `p` asks the running service to poll the selected
+watch now. Everything else it touches is the service lock file it opens to ask whether the service is
+running, so it is safe beside a running service, and several monitors may run at once.
 
 `status.json` carries a `format` number (currently 1): new fields are added without notice, and that number goes
 up only if an existing field changes meaning, so a consumer can rely on the ones it knows.
@@ -53,15 +53,17 @@ A record that watchglass does not recognise yet stays visible at verbose rather 
 | `a` | every watch's records instead of the selected one's |
 | `v` | cycle the pane's verbosity: quiet → normal → verbose |
 | `space` | pause the pane (records keep arriving; the header counts them) |
+| `p` | poke the selected watch: ask the running service to poll it now |
 | `r` | re-read the config now (new and removed watches) |
 
 The mouse works too: a click selects a row, and the wheel scrolls the pane.
 
 ## What it is not
 
-It cannot change anything: no enable, no disable, no poll now. It keeps the last few hundred records in memory
-and does not browse history (use `watchglass logs` for that), and it needs a terminal: scripts and agents use
-`watchglass status --json` and `watchglass logs --json`, which are the machine-readable interface.
+It cannot enable or disable a watch, and it cannot poll without the service: `p` writes a request file only
+when the service is running (otherwise it says so and writes nothing). It keeps the last few hundred records in
+memory and does not browse history (use `watchglass logs` for that), and it needs a terminal: scripts and
+agents use `watchglass status --json` and `watchglass logs --json`, which are the machine-readable interface.
 
 ## When a poll is in flight
 

@@ -11,7 +11,7 @@ The running service picks up changes without a restart. Every master tick (`relo
 
 **Code needs no reload.** Every hook call starts a fresh process that imports watch.py and runs scripts from disk, so a code edit applies at that watch's next hook call, even sooner than a config edit.
 
-**Control files are read every second.** `watchglass enable` and `watchglass disable` work by deleting or writing the watch's `offline.json`; the watch's scheduler checks it about once a second.
+**Control files are read every second.** `watchglass enable` and `watchglass disable` work by deleting or writing the watch's `offline.json`; the watch's scheduler checks it about once a second. `watchglass poke NAME` writes `runtime/poke/NAME`, which the service consumes on the same beat: the watch becomes due now, and a watch that will not poll (disabled or permanently offline) is logged as `watch.poke_ignored` instead.
 
 Not reloaded while running: the `[log]` rotation settings (read at start) and `--watch` limits given to `watchglass run`.
 

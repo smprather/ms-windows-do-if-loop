@@ -21,6 +21,8 @@ Every record has `ts` (local time, RFC 3339 with offset), `level` (`DEBUG`, `INF
 | `check.outcome` | `outcome`, `reason`, `payload`, `condition_before`, `condition_after`, `pending_edge`, `actions`, `faked` |
 | `poll.end` | `failed`, `failures`, `rejections`, `permanent_reason`, `condition`, `pending_edge`, `dry_run` |
 | `watch.offline` / `watch.online` | `reason`, `by_user`, `permanent`, `last_failure` |
+| `watch.poked` | the service accepted a `watchglass poke`: that watch is due now |
+| `watch.poke_ignored` | `reason`: a poke was consumed but the watch will not poll (`enabled = false`, disabled by user, permanently offline, no such watch) |
 | `watch.crash` | `error`, `traceback` (a bug in watchglass itself; the watch retries after a minute) |
 | `observer.started` | `observer`, `kind`; `argv` and `pid` (command) or `path`, `native`, `native_error` (files) |
 | `observer.connected` | `observer`, `remote`, `dir`, `python`, `version`, `inotify`: a remote_files observer's ssh connection is up |

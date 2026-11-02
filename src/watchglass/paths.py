@@ -58,6 +58,13 @@ class Paths:
     def stop_request(self) -> Path:
         return self.runtime / "stop.request"
 
+    @property
+    def poke_dir(self) -> Path:
+        return self.runtime / "poke"
+
+    def poke_request(self, watch: str) -> Path:
+        return self.poke_dir / watch
+
     def watch_state_dir(self, watch: str) -> Path:
         return self.state_home / "watches" / watch
 

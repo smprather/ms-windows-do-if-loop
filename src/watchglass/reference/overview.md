@@ -23,7 +23,7 @@ watchglass is a command-line tool that starts at login and runs in the backgroun
 - `watchglass run` (the service) runs one scheduler thread per watch and a master tick that reloads changed config files and writes `status.json`.
 - Every hook call runs in a fresh child process in its own process group: Python hooks through `python -m watchglass.worker`, command hooks directly. A timeout kills the whole group, including anything the hook started.
 - The service decides everything: which hook to run, what the outcome means, when to back off, when a watch goes offline. Hooks only report.
-- The other commands work without talking to the service: they read the log, `status.json` and `offline.json`, and `enable`/`disable` write `offline.json`, which the service notices within a second.
+- The other commands work without talking to the service: they read the log, `status.json` and `offline.json`, and `enable`/`disable` write `offline.json`, which the service notices within a second. `poke` writes a request file the service reads on the same beat, making one watch due now.
 
 ## Commands
 
@@ -32,7 +32,7 @@ watchglass is a command-line tool that starts at login and runs in the backgroun
 | Run | `run`, `stop` |
 | Develop | `new`, `validate`, `poll` |
 | Inspect | `status`, `logs` |
-| Control | `enable`, `disable`, `rename` |
+| Control | `enable`, `disable`, `poke`, `rename` |
 | Setup | `init`, `install`, `uninstall` |
 | Reference | `docs` |
 

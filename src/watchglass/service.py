@@ -114,6 +114,7 @@ class Service:
         try:
             next_tick = time.monotonic() + self.global_config.reload_interval
             while not stop.wait(1.0):
+                self._process_pokes()
                 if self._stop_requested():
                     break
                 if time.monotonic() >= next_tick:
@@ -171,7 +172,35 @@ class Service:
         for name in sorted(set(self._watch_errors) - set(wanted)):
             del self._watch_errors[name]
             self._watch_signatures.pop(name, None)
+        self._process_pokes()
         self.write_status(now)
+
+    def _process_pokes(self) -> None:
+        """Poll each watch named by a `watchglass poke` request now. Requests are consumed even when refused."""
+        try:
+            requests = sorted(self.paths.poke_dir.iterdir())
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            self._sink(make_record("service.error", level="ERROR", error=f"poke requests: {exc}"))
+            return
+        for request in requests:
+            try:
+                if not request.is_file():
+                    continue
+                request.unlink()
+            except OSError:
+                continue
+            runner = self.runners.get(request.name)
+            if runner is None:
+                self._sink(make_record("watch.poke_ignored", level="WARNING", watch=request.name,
+                                       reason="no such running watch"))
+                continue
+            reason = runner.poke()
+            if reason is None:
+                self._sink(make_record("watch.poked", watch=request.name))
+            else:
+                self._sink(make_record("watch.poke_ignored", level="WARNING", watch=request.name, reason=reason))
 
     def _reload_global(self) -> None:
         signature = file_signature(self.config_path)

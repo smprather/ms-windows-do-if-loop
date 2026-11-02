@@ -15,7 +15,7 @@ __all__ = ["run"]
 
 
 def run(paths: Paths, config_path: Path) -> None:
-    """Run the monitor until the user quits. Read-only: nothing here writes to watchglass's state."""
+    """Run the monitor until the user quits. The app writes only poke requests, never watchglass state."""
     monitor = Monitor(paths, config_path)
     monitor.start()
     try:

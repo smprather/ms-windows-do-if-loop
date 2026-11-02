@@ -59,14 +59,14 @@ def test_help_points_agents_at_the_docs():
 
 
 KEY_FACTS = {
-    "tui": ["watchglass tui", "read-only", "polling", "space", "status.json", "logs --json", "countdown", "orphaned", "in_flight", "format"],
+    "tui": ["watchglass tui", "poke", "polling", "space", "status.json", "logs --json", "countdown", "orphaned", "in_flight", "format"],
     "python": ["watchglass.Unknown", "(True, payload)", "1 MiB", "watchglass_watch", "top-level"],
     "config": ["single-quoted"],
     "executables": ["WATCHGLASS_PAYLOAD_OUT", "WATCHGLASS_PAYLOAD_FILE", "WATCHGLASS_SETTINGS_FILE", "WATCHGLASS_EVENTS_FILE", "[check_exit_codes]", "/bin/sh -c", "Windows PowerShell", ".ps1", "UTF8Encoding", "watchglass kit"],
     "states": ["| `true` |", "initial_condition", "stop at the first failure", "never overlap"],
     "failures": ["max_failures", "retry_after", "alert_command", "WATCHGLASS_ALERT_EVENT", "offline.json", "retry_base", "Trial polls", "max_auth_failures", "Rejected credentials", "TransferAuthFailed"],
     "storage": ["ctx.data_dir", "ctx.run_dir", "file_key", "LedgerCorrupt", "watchglass rename", "%LOCALAPPDATA%"],
-    "logging": ["watchglass.jsonl", "poll_id", "hook.end", "check.outcome", "observer.stopped", "observer.rejected", "extra=", "data_clipped", "observer.connected"],
+    "logging": ["watchglass.jsonl", "poll_id", "hook.end", "check.outcome", "observer.stopped", "observer.rejected", "watch.poked", "extra=", "data_clipped", "observer.connected"],
     "environment": ["/dev/null", "SIGTERM", "SSH_AUTH_SOCK", "BatchMode=yes", "[environment]", "environment_file", "setx", "Job Object", "watchglass stop", "Command Processor"],
     "dependencies": ["python_dependencies", "uv run", "--offline", "watchglass validate"],
     "reload": ["reload_interval", "last valid", "watch.removed", "offline.json"],

@@ -312,6 +312,35 @@ def test_the_service_view_of_an_in_flight_hook_is_shown(xdg, make_watch):
         run_app(monitor, check)
 
 
+def test_p_asks_the_service_to_poll_the_selected_watch(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        assert app.selected == "a"
+        await pilot.press("p")
+        await pilot.pause()
+        assert xdg.poke_request("a").is_file()
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_p_writes_nothing_when_the_service_is_not_running(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        await pilot.press("p")
+        await pilot.pause()
+        assert not xdg.poke_request("a").exists()
+
+    run_app(monitor, check)
+
+
 def test_q_quits_the_app(xdg, make_watch):
     make_watch("a", config=WATCH_CONFIG)
     publish(xdg, status_document(watches={"a": entry()}))

@@ -1,4 +1,4 @@
-"""The Textual app: it renders a Monitor and derives nothing of its own. Read-only, like the Monitor."""
+"""The Textual app: it renders a Monitor and derives nothing of its own. Its one write is a poke request."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable, Footer, RichLog, Static
 
+from watchglass.control import poke_watch
 from watchglass.output import NORMAL, sanitize
+from watchglass.statusview import service_running
 from watchglass.tui import monitor as view
 from watchglass.tui.monitor import Monitor, Status, WatchRow
 
@@ -30,7 +32,7 @@ def line_style(line: str) -> str:
 
 
 class WatchglassApp(App[None]):
-    """A read-only, live view of the service's watches and their recent actions. Quit with q or Ctrl-C."""
+    """A live view of the service's watches and their recent actions. Quit with q or Ctrl-C."""
 
     TITLE = "watchglass"
     CSS = """
@@ -47,6 +49,7 @@ class WatchglassApp(App[None]):
         Binding("a", "toggle_all", "all watches"),
         Binding("v", "cycle_verbose", "verbosity"),
         Binding("space", "toggle_pause", "pause"),
+        Binding("p", "poke", "poke"),
         Binding("r", "rescan", "rescan"),
     ]
 
@@ -263,6 +266,22 @@ class WatchglassApp(App[None]):
         self.monitor.rescan()
         self.monitor.refresh()
         self.update_status()
+
+    def action_poke(self) -> None:
+        """Ask the running service to poll the selected watch now (one request file; nothing else)."""
+        name = self.selected
+        if name is None:
+            self.notify("select a watch to poke", severity="warning")
+            return
+        if not service_running(self.monitor.paths):
+            self.notify("no watchglass service is running", severity="warning")
+            return
+        try:
+            poke_watch(self.monitor.paths, name)
+        except OSError as exc:
+            self.notify(f"could not poke {name}: {exc}", severity="error")
+            return
+        self.notify(f"poke requested: {name}")
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value is not None:

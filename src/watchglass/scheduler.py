@@ -104,6 +104,7 @@ class WatchRunner:
         self._observers: dict[str, Observer] = {}
         self._observers_lock = threading.Lock()
         self._observer_key: Any = None
+        self._poke = False
 
     @property
     def config(self) -> WatchConfig:
@@ -114,6 +115,26 @@ class WatchRunner:
         with self._lock:
             self._pending = config
         self._wake.set()
+
+    def poke(self) -> str | None:
+        """Make the next poll due now; None when accepted, else why this watch will not poll.
+
+        Safe to call from another thread. A poke overrides the interval, the failure backoff and an ordinary
+        offline marker (the forced poll is a trial), but never `enabled = false`, a user's disable or a
+        permanent rejection: polling those again cannot succeed, and repeating a rejected login is damage.
+        """
+        if not self._config.enabled:
+            return "disabled (enabled = false)"
+        marker = self.offline
+        if marker is not None:
+            if marker.by_user:
+                return "disabled by user"
+            if marker.permanent:
+                return f"offline: {marker.reason}"
+        with self._lock:
+            self._poke = True
+        self._wake.set()
+        return None
 
     def add_event(self, event: dict[str, Any], *, wake: bool = True) -> int:
         """Queue an observer event for the next poll; with wake, poll as soon as the schedule allows. Thread-safe.
@@ -247,10 +268,16 @@ class WatchRunner:
         if not config.enabled:
             return None
         if self.offline is not None:
-            if self.offline.by_user or self.offline.permanent or config.retry_after is None:
+            if self.offline.by_user or self.offline.permanent:
+                return None
+            if self._poke:
+                return 0.0  # a poke asks for a trial poll now, even when retry_after is not set
+            if config.retry_after is None:
                 return None
             base = self.last_trial if self.last_trial is not None else self.offline.since_epoch()
             return max(base + self._trial_delay(config) - now, 0.0)
+        if self._poke:
+            return 0.0
         if self._wake_requested and self.state.failures == 0:
             earliest = now if self._last_end is None else self._last_end + WAKE_GAP
             return max(min(self.next_due, max(earliest, self._hold_until)) - now, 0.0)
@@ -303,6 +330,7 @@ class WatchRunner:
         config = self._config
         with self._lock:
             self._wake_requested = False
+            self._poke = False
             mark, events = self.events.pending()
         with hold_lock(self._paths.watch_lock(self.name)):
             # Checked under the lock: `watchglass rename` moves the directory while holding it.

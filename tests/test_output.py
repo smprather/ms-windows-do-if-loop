@@ -67,6 +67,14 @@ def test_format_poll_end_and_unknown_event():
     assert other.startswith("10:11:12 psg custom.thing ")
 
 
+def test_format_poke_events():
+    assert format_record({**BASE, "event": "watch.poked"}) == "10:11:12 psg poked: polling now"
+    ignored = {**BASE, "event": "watch.poke_ignored", "level": "WARNING", "reason": "disabled by user"}
+    assert format_record(ignored) == "10:11:12 psg poke ignored: disabled by user"
+    assert record_level({**BASE, "event": "watch.poked"}) == 1
+    assert record_level(ignored) == 0
+
+
 def test_a_headline_event_is_a_plain_line_not_an_indented_log():
     record = {**BASE, "event": "plugin.event", "level": "INFO",
               "message": "found a.bin (4 KiB) on host", "fields": {"size": 4096}}
