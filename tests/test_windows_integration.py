@@ -34,6 +34,17 @@ def scheduled_task(monkeypatch, tmp_path):
     winsched.run_powershell(winsched.unregister_script())  # best effort: the test removes it too
 
 
+def test_powershell_runs_and_captures_output(tmp_path):
+    """`run_powershell` itself is only faked in the unit suite; prove it works on a real Windows host."""
+    marker = tmp_path / "ran.txt"
+    result = winsched.run_powershell(
+        f"Set-Content -LiteralPath '{marker}' -Value 'ran'; Write-Output 'hello'"
+    )
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
+    assert marker.read_text(encoding="utf-8").strip() == "ran"
+    assert result.stdout.strip() == "hello"
+
+
 def test_the_task_probe_sees_a_registered_task_and_its_removal(scheduled_task):
     """Issue 32's fallback decision rests on this probe, so prove it against the real scheduler."""
     script = winsched.register_script("cmd.exe", "/c exit 0")
