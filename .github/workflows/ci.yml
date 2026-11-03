@@ -33,6 +33,19 @@ jobs:
       - if: runner.os == 'Linux' && matrix.python == '3.12'
         run: uv run ty check src
 
+  windows-integration:
+    runs-on: windows-latest
+    env:
+      UV_PYTHON: "3.12"
+      WATCHGLASS_WINDOWS_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2, pinned to a commit
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@05273c154d09957eb9a2377d9c988fbda431d1c5  # pi-lens-ignore: zizmor:cache-poisoning -- v6.4.0 pinned; only this repository's pushes write the cache, and a fork's pull request cannot write the base branch's
+      - run: uv sync
+      - run: uv run pytest -q tests/test_windows_integration.py -ra
+
   remote-watcher-python-3-6:
     runs-on: ubuntu-latest
     container: python:3.6-slim
