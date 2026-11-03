@@ -1,6 +1,6 @@
 """watchglass: poll conditions and run actions, from login onward."""
 
-__version__ = "2026.11.2"
+__version__ = "2026.11.3"
 
 from watchglass.ctx import (  # noqa: E402
     Checkpoint,
