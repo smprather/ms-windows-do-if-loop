@@ -126,6 +126,10 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
         lines.append(_watch_line(name, entry, now))
         if entry.get("in_flight"):
             lines.append(f"    {in_flight_text(entry['in_flight'], entry.get('transfer'), now=now)}")
+            transfer_now = entry.get("transfer")
+            path = transfer.activity_path(transfer_now) if isinstance(transfer_now, dict) else None
+            if path:
+                lines.append(f"      -> {path}")  # where the bytes are going (issue 31)
         offline = entry.get("offline")
         if offline:
             detail = f"    offline since {offline['since']}: {offline['reason']}"

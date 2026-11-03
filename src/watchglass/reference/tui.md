@@ -22,12 +22,14 @@ up only if an existing field changes meaning, so a consumer can rely on the ones
 - **What is running right now**: the service puts the hook it is running (`in_flight`) and what that hook is
   transferring (`transfer`, with the partial file's size) into `status.json`, so `watchglass status` and this
   monitor show them without reading the log. A long transfer therefore reads `transferring` rather than
-  `polling`, and `NOTE` names the file.
+  `polling`, `NOTE` names the file, and `status` prints where the bytes are going on the line under it.
 - **The pane**: the selected watch's recent records, oldest first — the same lines `watchglass logs` prints.
   While a hook is running the pane header names it and how long it has been going: `recipe pull:on_true running
-  1m30s · pulling psg-export.gz 74% (2.6 GiB/3.7 GiB), 2.1 MiB/s, 8m left`. A transfer says how far it has got
-  (from the partial file's size), how fast and how long is left once there are two samples of it; an upload says
-  its size, since scp reports no progress of its own.
+  1m30s · pulling psg-export.gz 74% (2.6 GiB/3.7 GiB), 2.1 MiB/s, 8m left · /srv/staging/.psg-export.gz.part`.
+  A transfer says how far it has got (from the partial file's size), how fast and how long is left once there
+  are two samples of it, and where its bytes are going: a pull's `.NAME.part`, or a push's local source and
+  remote destination (`~` stands for your home directory in the header). An upload says its size, since scp
+  reports no progress of its own.
 
 Below 80 columns `NOTE` is dropped, and then `OBS`.
 

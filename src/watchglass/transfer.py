@@ -812,6 +812,17 @@ def activity_text(activity: dict[str, Any]) -> str:
     return f"pulling {name} {progress * 100:.0f}%"
 
 
+def activity_path(activity: dict[str, Any]) -> str | None:
+    """Where this transfer's bytes are going: a pull's `part` file, or a push's `source -> dest` (issue 31)."""
+    part = activity.get("part")
+    if isinstance(part, str):
+        return part  # a pull accumulates here; the final name is only a rename away
+    source, dest = activity.get("source"), activity.get("dest")
+    if isinstance(source, str) and isinstance(dest, str):
+        return f"{source} -> {dest}"
+    return dest if isinstance(dest, str) else None
+
+
 def copy(
     source: str | os.PathLike[str] | Endpoint,
     destination: str | os.PathLike[str] | Endpoint,
@@ -1024,7 +1035,9 @@ def push(
         size = local.stat().st_size
     except OSError:
         size = None
-    with _activity(name=local.name, size=size):  # status.json and the TUI read this
+    with _activity(  # status.json and the TUI read this
+        name=local.name, size=size, source=str(local), dest=target.scp_arg()
+    ):
         try:
             copy(local, target, options=options, report=report, warn=warn)
         except CommandFailed as exc:

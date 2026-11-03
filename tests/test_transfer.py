@@ -313,6 +313,33 @@ def test_transfer_progress_and_its_text():
     assert transfer.activity_text({"name": "a.bin", "size": 4096}) == "pushing a.bin (4 KiB)"
 
 
+def test_activity_path_names_where_a_transfer_writes():
+    """A pull accumulates in `part`; a push reports its local source and the remote destination (issue 31)."""
+    assert transfer.activity_path({"name": "a", "part": "/stage/.a.bin.part"}) == "/stage/.a.bin.part"
+    assert transfer.activity_path({"name": "a", "source": "/local/a.bin", "dest": "u@h:/in/a.bin"}) == (
+        "/local/a.bin -> u@h:/in/a.bin"
+    )
+    assert transfer.activity_path({"name": "a", "size": 4096}) is None
+
+
+def test_push_publishes_the_source_and_destination(tmp_path, monkeypatch):
+    """`status.json` must name both ends, so the TUI and `status` can show where a push writes (issue 31)."""
+    monkeypatch.setenv("WATCHGLASS_RUN_DIR", str(tmp_path))
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"data")
+    seen = []
+
+    def run(argv, env, timeout, *, options):
+        seen.append(transfer.read_activity(tmp_path))
+        return 0, "", "", False
+
+    monkeypatch.setattr(transfer, "_run", run)
+    transfer.push(local, "u@h:in/", marker="none")
+    assert seen and seen[0] is not None
+    assert seen[0]["source"] == str(local)
+    assert seen[0]["dest"] == "u@h:in/a.bin"
+
+
 def test_conpty_needs_windows_and_a_password_variable(monkeypatch):
     """password_mode = "conpty" is refused where it cannot work, with a message that says why (issue 6)."""
     monkeypatch.setattr(transfer.platform, "IS_WINDOWS", False)

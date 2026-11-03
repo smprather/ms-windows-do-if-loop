@@ -306,6 +306,7 @@ def test_the_service_view_of_an_in_flight_hook_is_shown(xdg, make_watch):
         assert cell(app, 0, "NOTE") == "big.bin"
         assert "recipe pull:on_true running 1m30s" in app.header
         assert "pulling big.bin 75%" in app.header
+        assert "/stage/.big.bin.part" in app.header  # where the bytes accumulate (issue 31)
 
     with running(xdg):
         monitor.refresh()

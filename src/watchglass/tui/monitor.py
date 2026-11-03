@@ -455,14 +455,30 @@ def note_text(row: WatchRow) -> str:
     return row.note
 
 
+def _short_home(path: str) -> str:
+    """`path` with the home directory written as `~`, so a long one-line header keeps room for the rest."""
+    home = str(Path.home()).rstrip("\\/")
+    if not home:
+        return path
+    plain, plain_home = path.replace("\\", "/"), home.replace("\\", "/")
+    if plain == plain_home:
+        return "~"
+    if plain.startswith(plain_home + "/"):
+        return "~" + path[len(home):]
+    return path
+
+
 def transfer_line(activity: dict[str, Any], rate: float | None = None) -> str:
-    """The transfer part of the header: what is moving, how far, and (with two samples) how fast and how long left."""
+    """The transfer part of the header: what is moving, how far, how fast and how long left, then where."""
     text = transfer.activity_text(activity)
     if isinstance(rate, float) and rate > 0:
         text += f", {transfer.format_bytes(int(rate))}/s"  # pi-lens-ignore: unchecked-numeric-parse-python -- our own float
         size, part_size = activity.get("size"), activity.get("part_size")
         if isinstance(size, int) and isinstance(part_size, int) and 0 <= part_size < size:
             text += f", {format_duration(int((size - part_size) / rate))} left"
+    path = transfer.activity_path(activity)
+    if path:
+        text += f" · {_short_home(path)}"  # last, so the rate and ETA stay with the numbers they describe
     return text
 
 

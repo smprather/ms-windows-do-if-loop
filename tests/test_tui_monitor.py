@@ -422,3 +422,20 @@ def test_the_transfer_line_says_how_long_is_left_once_it_knows_the_rate():
                 "size": 10 * 1024 * 1024}
     line = pane_header_text(None, transfer_now=activity, rate=1024 * 1024.0, now=1000.0)
     assert "1 MiB/s" in line and "8s left" in line
+    assert line.endswith("8s left · /stage/.big.bin.part")  # the path comes last, after the rate and ETA (issue 31)
+
+
+def test_the_transfer_line_names_where_the_bytes_are_going():
+    """A pull names its partial file; a push names its local source and remote destination (issue 31)."""
+    pull = {"name": "big.bin", "part": "/stage/.big.bin.part", "part_size": 2, "size": 10}
+    assert "/stage/.big.bin.part" in pane_header_text(None, transfer_now=pull, now=1000.0)
+    push = {"name": "big.bin", "source": "/local/big.bin", "dest": "u@h:/in/big.bin", "size": 10}
+    assert "/local/big.bin -> u@h:/in/big.bin" in pane_header_text(None, transfer_now=push, now=1000.0)
+
+
+def test_the_transfer_line_shortens_the_home_directory(monkeypatch):
+    """A long home path would otherwise crowd the one-line header."""
+    monkeypatch.setattr(monitor_module.Path, "home", lambda: Path("/home/me"))
+    line = pane_header_text(None, transfer_now={"name": "a", "part": "/home/me/relay/.a.part"}, now=1000.0)
+    assert "~/relay/.a.part" in line
+    assert "/home/me" not in line

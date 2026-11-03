@@ -48,6 +48,7 @@ def test_status_shows_what_a_watch_is_running_and_transferring(xdg, make_watch):
     assert "transferring" in result.output
     assert "recipe pull:on_true running 1m30s" in result.output
     assert "pulling a.bin 50% (2 KiB/4 KiB)" in result.output
+    assert f"-> {part}" in result.output  # where the bytes accumulate, not just the watch directory (issue 31)
     assert data["watches"]["a"]["in_flight"]["hook"] == "on_true"
     lines = {line.split()[0]: line for line in result.output.splitlines() if line.startswith(("a ", "b "))}
     assert lines["a"].index("condition") == lines["b"].index("condition")  # the longer label stays aligned
