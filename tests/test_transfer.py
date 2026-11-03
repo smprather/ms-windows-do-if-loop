@@ -21,6 +21,7 @@ from watchglass.transfer import (
     push,
     remote_path_arg,
     scp_argv,
+    upload,
     with_known_hosts,
     write_askpass,
 )
@@ -653,6 +654,97 @@ def test_pull_still_fails_when_the_part_does_not_verify(tmp_path, monkeypatch):
     fake_scp(monkeypatch, writes=stage / ".x.part")
     with pytest.raises(TransferFailed, match="expected 99"):
         pull("me@h:/x", stage, size=99, options=ScpOptions(preserve_mtime=True))
+
+
+PTY_REJECTED = (
+    "u@h's password: \nu@h: Permission denied (publickey,password).\n"
+    "C:\\Program Files\\OpenSSH\\scp.EXE: Connection closed\n"
+)
+
+
+def fake_pty_scp(monkeypatch, console=PTY_REJECTED, returncode=255, writes=None):
+    """A pty run's shape: the console text, with stderr empty because the pty merges the streams (issues 29, 30)."""
+
+    def run(argv, env, timeout, *, options):
+        if writes is not None:
+            writes.write_bytes(b"data")
+        return returncode, console, "", False
+
+    monkeypatch.setattr(transfer, "_run", run)
+
+
+def test_a_pty_rejection_on_stdout_parks_a_copy(tmp_path, monkeypatch):
+    fake_pty_scp(monkeypatch)
+    with pytest.raises(transfer.TransferAuthFailed) as caught:
+        copy(tmp_path / "a.gz", "me@h:in/")
+    assert caught.value.permanent_reason == "authentication failed"
+
+
+def test_a_pty_rejection_on_stdout_parks_a_resumed_pull(tmp_path, monkeypatch):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".x.part").write_bytes(b"ab")
+    fake_pty_scp(monkeypatch)
+    with pytest.raises(transfer.TransferAuthFailed) as caught:
+        pull("me@h:/x", stage, size=10, sha256="a" * 64, resume=True, options=ScpOptions(protocol="sftp"))
+    assert caught.value.permanent_reason == "authentication failed"
+
+
+def test_a_pty_rejection_on_stdout_parks_a_resumed_push(tmp_path, monkeypatch):
+    local = tmp_path / "a.gz"
+    local.write_bytes(b"data")
+    replies = iter(
+        [(1, "", 'dest open "/in/a.gz": Permission denied\n', False), (255, PTY_REJECTED, "", False)]
+    )
+    monkeypatch.setattr(transfer, "_run", lambda argv, env, timeout, *, options: next(replies))
+    with pytest.raises(transfer.TransferAuthFailed) as caught:
+        push(local, "me@h:in/", options=ScpOptions(protocol="sftp"), resume=True)
+    assert caught.value.permanent_reason == "authentication failed"
+
+
+def test_a_pty_rejection_on_stdout_parks_an_upload(tmp_path, monkeypatch):
+    local = tmp_path / "a.gz"
+    local.write_bytes(b"data")
+    fake_pty_scp(monkeypatch)
+    with pytest.raises(transfer.TransferAuthFailed) as caught:
+        upload(local, "me@h:in/a.gz", options=ScpOptions(protocol="sftp"))
+    assert caught.value.permanent_reason == "authentication failed"
+
+
+def test_a_pty_set_times_failure_after_the_data_is_a_warning(tmp_path, monkeypatch):
+    """conpty also merges the set-times failure into stdout, so the warning path must read the console (issue 30)."""
+    target = tmp_path / "x"
+    fake_pty_scp(
+        monkeypatch,
+        console="u@h's password: \nlocal set times: Input/output error\n",
+        returncode=1,
+        writes=target,
+    )
+    warnings = []
+    copy("me@h:/x", target, options=ScpOptions(preserve_mtime=True), warn=warnings.append)
+    assert target.read_bytes() == b"data"
+    assert warnings and "times" in warnings[0]
+
+
+def test_a_pty_gone_source_is_withdrawn_from_the_console(tmp_path, monkeypatch):
+    """Windows' pty prefixes scp's own lines with its executable path, not `scp:` (issue 30)."""
+    console = (
+        "u@h's password: \n"
+        "C:\\Program Files\\OpenSSH\\scp.EXE: /remote/a.bin: No such file or directory\n"
+        "C:\\Program Files\\OpenSSH\\scp.EXE: Connection closed\n"
+    )
+    fake_pty_scp(monkeypatch, console=console, returncode=1)
+    with pytest.raises(transfer.TransferMissing, match="gone from the source"):
+        copy("me@h:/remote/a.bin", tmp_path / "pulled.bin")
+
+
+def test_a_pty_gone_reget_source_is_withdrawn_from_the_console(tmp_path, monkeypatch):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / ".a.bin.part").write_bytes(b"ab")
+    fake_pty_scp(monkeypatch, console="u@h's password: \nFile \"/remote/a.bin\" not found.\n", returncode=1)
+    with pytest.raises(transfer.TransferMissing, match="gone from the source"):
+        pull("me@h:/remote/a.bin", stage, size=10, sha256="a" * 64, resume=True, options=ScpOptions(protocol="sftp"))
 
 
 def test_missing_password_env_says_how_to_make_it_hot(monkeypatch):

@@ -147,12 +147,29 @@ class TransferAuthFailed(TransferFailed):
         super().__init__(f"command exited {returncode}: {shown}{detail}")
 
 
-def _failed_command(argv: Sequence[str] | str, returncode: int, stderr: str) -> CommandFailed | TransferAuthFailed:
-    """The error for a failed local scp/sftp run: a permanent rejection, or an ordinary CommandFailed."""
-    reason = rejection_reason(stderr)
+def _console_text(stderr: str, stdout: str) -> str:
+    """A failed run's text: stderr when it printed anything, else the pty's merged console on stdout.
+
+    `password_mode = "conpty"` merges scp/sftp's stderr into stdout, so there the console is the only place a
+    rejection, a set-times failure or a vanished source appears (issues 29, 30). A run that printed anything
+    to stderr keeps exactly the old behavior.
+    """
+    return stderr or stdout
+
+
+def _failed_command(
+    argv: Sequence[str] | str, returncode: int, stderr: str, stdout: str = ""
+) -> CommandFailed | TransferAuthFailed:
+    """The error for a failed local scp/sftp run: a permanent rejection, or an ordinary CommandFailed.
+
+    The console text (`_console_text`) is classified and shown, because a pty's rejection is only on stdout
+    there and its stderr is always empty (issue 29). Anything on stderr keeps the old behavior exactly.
+    """
+    console = _console_text(stderr, stdout)
+    reason = rejection_reason(console)
     if reason is not None:
-        return TransferAuthFailed(argv, returncode, stderr, reason)
-    return CommandFailed(argv, returncode, stderr)
+        return TransferAuthFailed(argv, returncode, console, reason)
+    return CommandFailed(argv, returncode, console)
 
 
 @dataclass(frozen=True)
@@ -331,14 +348,14 @@ def sftp_put_batch(local: Path, target: Endpoint) -> str:
     return f"put {_quoted_for_sftp(str(local))} {_quoted_for_sftp(target.path)}\n"
 
 
-def _set_times_only(stderr: str) -> bool:
+def _set_times_only(text: str) -> bool:
     """Whether scp failed only on the times it sets after the data (the data itself arrived).
 
     Two shapes: Windows' OpenSSH says `local set times: Input/output error` after a pull whose bytes arrived,
     and a server that will not set them says `set times: Operation not permitted`. scp sets the times last, so
-    either text means the transfer itself completed.
+    either text means the transfer itself completed. `text` is `_console_text`'s (issue 30).
     """
-    return re.search(r"set times:", stderr or "", re.IGNORECASE) is not None
+    return re.search(r"set times:", text or "", re.IGNORECASE) is not None
 
 
 def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
@@ -355,22 +372,24 @@ def _refused_overwrite(exc: CommandFailed, name: str) -> bool:
 
 _MISSING = re.compile(r"no such file or directory|the system cannot find the (?:file|path) specified", re.IGNORECASE)
 _LOCAL_OPEN = re.compile(r"\bopen local\b", re.IGNORECASE)
-_SCP_SAYS = re.compile(r"^scp:", re.MULTILINE)
+_SCP_SAYS = re.compile(r"^(?:[A-Za-z]:[^\r\n:]*[\\/])?scp(?:\.exe)?:", re.IGNORECASE | re.MULTILINE)
 _SFTP_NOT_FOUND = re.compile(r'File\s+"(.*)"\s+not found', re.IGNORECASE)
 
 
-def _source_missing(stderr: str, destination: Endpoint, source: Endpoint) -> bool:
+def _source_missing(text: str, destination: Endpoint, source: Endpoint) -> bool:
     """Whether scp failed because the remote file it was told to read is gone, rather than the local side.
 
     scp prefixes the source host's own diagnostics with `scp:` — `scp: <path>: No such file or directory` from
     OpenSSH's classic protocol, `scp: No such file or directory: <path>` from some servers, and Windows'
-    `scp: The system cannot find the file specified: <path>` (its wording of ENOENT). A local-side failure
-    does not look like that: it is bare (`<local path>: No such file or directory`) or says `open local
-    "<local path>"`. The local side here is the part file we made, so naming it means the source is not known
-    to be gone. Compare whole paths (scp prints the path it was handed, and a Windows one may come back with
-    backslashes), so a source and a destination that share a file name are still told apart.
+    `scp: The system cannot find the file specified: <path>` (its wording of ENOENT). On a Windows pty the
+    same line carries the executable's path instead (`C:\\Program Files\\OpenSSH\\scp.EXE: ...`, issue 30),
+    which `_SCP_SAYS` accepts. A local-side failure does not look like that: it is bare (`<local path>: No such
+    file or directory`) or says `open local "<local path>"`. The local side here is the part file we made, so
+    naming it means the source is not known to be gone. Compare whole paths (scp prints the path it was handed,
+    and a Windows one may come back with backslashes), so a source and a destination that share a file name are
+    still told apart. `text` is `_console_text`'s.
     """
-    text = stderr or ""
+    text = text or ""
     if not _MISSING.search(text) or not _SCP_SAYS.search(text) or _LOCAL_OPEN.search(text):
         return False
     spelled = text.replace("\\", "/")
@@ -384,22 +403,23 @@ def _source_missing(stderr: str, destination: Endpoint, source: Endpoint) -> boo
     return True
 
 
-def _reget_source_missing(stderr: str, source: Endpoint) -> bool:
+def _reget_source_missing(text: str, source: Endpoint) -> bool:
     """Whether sftp's reget failed because the remote file is gone (`File "<path>" not found.`).
 
     The batch names the source first, so the local part can never be mistaken for it. sftp prints the name it
-    parsed, which may be the raw one or a backslash-escaped one, and either is the source.
+    parsed, which may be the raw one or a backslash-escaped one, and either is the source. `text` is
+    `_console_text`'s (issue 30).
     """
-    for match in _SFTP_NOT_FOUND.finditer(stderr or ""):
+    for match in _SFTP_NOT_FOUND.finditer(text or ""):
         shown = match.group(1)
         if shown == source.path or _unescaped_for_sftp(shown) == source.path:
             return True
     return False
 
 
-def _withdrawn(source: Endpoint, stderr: str) -> TransferMissing:
+def _withdrawn(source: Endpoint, text: str) -> TransferMissing:
     """The error for a source file that is gone (its scp/sftp line is kept in the message)."""
-    tail = (stderr or "").strip().splitlines()
+    tail = (text or "").strip().splitlines()
     return TransferMissing(f"{source.scp_arg()} is gone from the source: {tail[-1] if tail else 'no such file or directory'}")
 
 
@@ -629,9 +649,10 @@ def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Repor
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {source.scp_arg()} -> {part}")
     if returncode != 0:
-        if _reget_source_missing(stderr, source):
-            raise _withdrawn(source, stderr)
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
+        console = _console_text(stderr, stdout)
+        if _reget_source_missing(console, source):
+            raise _withdrawn(source, console)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
 
 
 def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
@@ -649,7 +670,7 @@ def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Repo
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
     if returncode != 0:
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
 
 
 def _sftp_put(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
@@ -667,7 +688,7 @@ def _sftp_put(local: Path, target: Endpoint, options: ScpOptions, report: Report
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
     if returncode != 0:
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
 
 
 def _run(
@@ -824,17 +845,18 @@ def copy(
         shown = format_duration(limit or 0)
         raise TransferFailed(f"scp timed out after {shown}: {src.scp_arg()} -> {dst.scp_arg()}")
     if returncode != 0:
-        if options.preserve_mtime and _set_times_only(stderr) and (dst.remote or Path(dst.path).exists()):
+        console = _console_text(stderr, stdout)
+        if options.preserve_mtime and _set_times_only(console) and (dst.remote or Path(dst.path).exists()):
             if warn is not None:
-                tail = (stderr or "").strip().splitlines()
+                tail = console.strip().splitlines()
                 warn(
                     f"{dst.scp_arg()} arrived, but its times could not be set ({tail[-1] if tail else 'set times'}); "
                     "it now carries the transfer time"
                 )
             return
-        if src.remote and _source_missing(stderr, dst, src):
-            raise _withdrawn(src, stderr)
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr)
+        if src.remote and _source_missing(console, dst, src):
+            raise _withdrawn(src, console)
+        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
 
 
 def sha256_file(path: str | os.PathLike[str]) -> str:

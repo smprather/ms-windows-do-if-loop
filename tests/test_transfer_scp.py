@@ -198,11 +198,20 @@ def test_missing_remote_file(tmp_path, server, ssh_config):
         "scp: No such file or directory: /remote/a.bin\n",  # the other ordering: asyncssh's server, as in this suite
         "scp: The system cannot find the file specified: C:\\remote\\a.bin\n",  # classic on Windows
         "scp: The system cannot find the path specified: C:\\remote\\a.bin\n",
+        # a pty merges the streams and Windows prefixes scp's own lines with the executable's path (issue 30)
+        "C:\\Program Files\\OpenSSH\\scp.EXE: /remote/a.bin: No such file or directory\n",
+        "C:\\Program Files\\OpenSSH\\scp.EXE: The system cannot find the file specified: C:\\remote\\a.bin\n",
     ],
 )
 def test_scp_says_a_source_is_gone(stderr):
     """Both orderings are real: OpenSSH's remote scp prints `<path>: <reason>`, asyncssh's server `<reason>: <path>`."""
     assert _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"), Endpoint(path="/remote/a.bin"))
+
+
+def test_a_remote_shells_scp_lookalike_is_not_scp_speaking():
+    """Only scp's own prefix counts: a remote login script printing `/usr/bin/scp:` is not evidence."""
+    stderr = "/usr/bin/scp: /remote/a.bin: No such file or directory\n"
+    assert not _source_missing(stderr, Endpoint(path="/stage/.a.bin.part"), Endpoint(path="/remote/a.bin"))
 
 
 @pytest.mark.parametrize(
