@@ -42,9 +42,27 @@ def register_script(executable: str, arguments: str) -> str:
             "$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited",
             f"Register-ScheduledTask -TaskName {_quote(TASK_NAME)} -Action $action -Trigger $trigger "
             "-Settings $settings -Principal $principal -Force | Out-Null",
-            f"Remove-Item -LiteralPath {_SHORTCUT} -ErrorAction SilentlyContinue",
+            remove_shortcut_script(),
         ]
     )
+
+
+def task_state_script() -> str:
+    """PowerShell: print `present` when the logon task exists, `absent` when it does not (issue 32).
+
+    A failed-looking registration can still leave the task in place (for example when a later step fails, or
+    an earlier task survived `-Force`). Checking before the fallback keeps `install` from adding a shortcut
+    beside a task that is already there.
+    """
+    return (
+        f"if (Get-ScheduledTask -TaskName {_quote(TASK_NAME)} -ErrorAction SilentlyContinue) "
+        "{ 'present' } else { 'absent' }"
+    )
+
+
+def remove_shortcut_script() -> str:
+    """PowerShell: remove the Startup-folder shortcut, if it is there (one autostart mechanism only)."""
+    return f"Remove-Item -LiteralPath {_SHORTCUT} -ErrorAction SilentlyContinue"
 
 
 def start_script() -> str:

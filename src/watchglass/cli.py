@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -780,6 +781,15 @@ def _last_line(text: str) -> str:
     return lines[-1] if lines else "no details"
 
 
+def _shell_reason(result: subprocess.CompletedProcess[str]) -> str:
+    """What PowerShell last said, preferring its error stream: never a bare `no details` (issue 32)."""
+    for stream in (result.stderr, result.stdout):
+        tail = _last_line(stream)
+        if tail != "no details":
+            return tail
+    return f"exit code {result.returncode}"
+
+
 def _install_windows(app: App, dry_run: bool) -> None:
     custom_config = app.config_path.resolve() if app.config_path != app.paths.config_file else None
     executable = winsched.pythonw()
@@ -789,24 +799,49 @@ def _install_windows(app: App, dry_run: bool) -> None:
     if dry_run:
         click.echo("would run in PowerShell:\n")
         click.echo(register)
-        click.echo("\nand, if Task Scheduler refuses, create a Startup-folder shortcut:\n")
+        click.echo("\nand, if Task Scheduler refuses and no task exists, create a Startup-folder shortcut:\n")
         click.echo(shortcut)
         return
     result = winsched.run_powershell(register)
-    if result.returncode == 0:
+    registered = result.returncode == 0
+    recovered = False
+    if not registered:
+        state = winsched.run_powershell(winsched.task_state_script())
+        answer = state.stdout.strip()
+        if answer == "present":
+            # The task is there even though the script reported a problem: keeping it is the only way to
+            # avoid two autostart entries racing for the same state at logon (issue 32).
+            registered = recovered = True
+            winsched.run_powershell(winsched.remove_shortcut_script())
+        elif answer != "absent":
+            _fail(
+                f"Task Scheduler refused ({_shell_reason(result)}), and whether the task exists could not be "
+                f"checked ({_shell_reason(state)}); not creating a Startup-folder shortcut, because two autostart "
+                "entries would race. Remove or fix the task, then try again"
+            )
+    if registered:
         started = winsched.run_powershell(winsched.start_script())
         if started.returncode == 0:
-            click.echo(f"registered Task Scheduler task '{winsched.TASK_NAME}' (at logon, restarted on failure) and started it")
+            started_text = "started it"
+        else:
+            started_text = (
+                f"could not start it now ({_shell_reason(started)}); it will start at the next logon"
+            )
+        if recovered:
+            click.echo(
+                f"Task Scheduler reported a problem ({_shell_reason(result)}), but the task "
+                f"'{winsched.TASK_NAME}' is registered; {started_text}"
+            )
         else:
             click.echo(
-                f"registered Task Scheduler task '{winsched.TASK_NAME}', but could not start it now "
-                f"({_last_line(started.stderr)}); it will start at the next logon"
+                f"registered Task Scheduler task '{winsched.TASK_NAME}' (at logon, restarted on failure); "
+                f"{started_text}"
             )
     else:
-        click.echo(f"Task Scheduler refused ({_last_line(result.stderr)}); using a Startup-folder shortcut instead")
+        click.echo(f"Task Scheduler refused ({_shell_reason(result)}); using a Startup-folder shortcut instead")
         fallback = winsched.run_powershell(shortcut)
         if fallback.returncode != 0:
-            _fail(f"could not create the Startup-folder shortcut either: {_last_line(fallback.stderr)}")
+            _fail(f"could not create the Startup-folder shortcut either: {_shell_reason(fallback)}")
         click.echo("created a Startup-folder shortcut (watchglass.lnk) and started watchglass")
     click.echo("check it with: watchglass status")
 
@@ -843,7 +878,9 @@ def install(app: App, dry_run: bool, force: bool) -> None:
     """Start watchglass at login: a systemd user service on Linux, a Task Scheduler logon task on Windows.
 
     On Windows it registers a Task Scheduler task "watchglass" that runs pythonw.exe -m watchglass run at logon
-    (no console window, restarted on failure); if policy forbids that, it creates a Startup-folder shortcut instead.
+    (no console window, restarted on failure); if policy forbids that and no task exists, it creates a
+    Startup-folder shortcut instead. A registration that reported an error but left the task in place is kept,
+    never doubled with a shortcut.
 
     Writes $XDG_CONFIG_HOME/systemd/user/watchglass.service with this watchglass's absolute path and the
     current PATH (so hooks find the same programs as your shell), then runs `systemctl --user daemon-reload`
