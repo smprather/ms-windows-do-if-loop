@@ -36,13 +36,21 @@ def scheduled_task(monkeypatch, tmp_path):
 
 def test_the_task_probe_sees_a_registered_task_and_its_removal(scheduled_task):
     """Issue 32's fallback decision rests on this probe, so prove it against the real scheduler."""
-    created = winsched.run_powershell(winsched.register_script("cmd.exe", "/c exit 0"))
-    assert created.returncode == 0, created.stderr or created.stdout
+    script = winsched.register_script("cmd.exe", "/c exit 0")
+    created = winsched.run_powershell(script)
+    assert created.returncode == 0, _diagnose(script)
     assert winsched.run_powershell(winsched.task_state_script()).stdout.strip() == "present"
 
     removed = winsched.run_powershell(winsched.unregister_script())
     assert removed.returncode == 0, removed.stderr or removed.stdout
     assert winsched.run_powershell(winsched.task_state_script()).stdout.strip() == "absent"
+
+
+def _diagnose(script: str) -> str:
+    """Re-run a failed script with its errors left visible: PowerShell 5.1 sometimes exits 1 silently."""
+    relaxed = script.replace("$ErrorActionPreference = 'Stop'", "$ErrorActionPreference = 'Continue'")
+    result = winsched.run_powershell(relaxed)
+    return f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
 
 
 def test_conpty_types_the_password_and_scrubs_it(tmp_path):
