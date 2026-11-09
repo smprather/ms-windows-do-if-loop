@@ -58,7 +58,8 @@ A record that watchglass does not recognise yet stays visible at verbose rather 
 | `p` | poke the selected watch: ask the running service to poll it now |
 | `r` | re-read the config now (new and removed watches) |
 
-The mouse works too: a click selects a row, and the wheel scrolls the pane.
+The mouse works too: a click selects a row, a double-click on a watch pokes it (the same request as
+`p`), and the wheel scrolls the pane.
 
 ## What it is not
 

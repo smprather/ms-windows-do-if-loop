@@ -5,8 +5,10 @@ from __future__ import annotations
 import time
 
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.message import Message
 from textual.widgets import DataTable, Footer, RichLog, Static
 
 from watchglass.control import poke_watch
@@ -20,6 +22,29 @@ PANE_LIMIT = 2000  # lines the pane widget keeps: a day-old monitor must not gro
 NARROW = 80  # below this, NOTE goes; below NARROWEST, OBS follows
 NARROWEST = 68
 LEVEL_NAMES = ("quiet", "normal", "verbose")
+
+
+class WatchTable(DataTable):
+    """The watches table. A double-click on a row asks to poke that watch, the mouse's `p`.
+
+    `DataTable` stops its own click events, so an app-level `on_click` never sees them; the chain count has to
+    be read where the click is handled.
+    """
+
+    class Poked(Message):
+        """Posted when a watch row is double-clicked."""
+
+        def __init__(self, watch: str) -> None:
+            super().__init__()
+            self.watch = watch
+
+    async def _on_click(self, event: events.Click) -> None:
+        meta = event.style.meta
+        row = meta.get("row")
+        if (event.chain == 2 and not meta.get("out_of_bounds", False)
+                and isinstance(row, int) and 0 <= row < len(self.ordered_rows)):
+            self.post_message(self.Poked(str(self.ordered_rows[row].key.value)))
+        await super()._on_click(event)
 
 
 def line_style(line: str) -> str:
@@ -79,7 +104,7 @@ class WatchglassApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Static(id="banner", markup=False)  # a path or a problem is data, not markup
-        yield DataTable(id="watches", cursor_type="row", zebra_stripes=False, show_cursor=True)
+        yield WatchTable(id="watches", cursor_type="row", zebra_stripes=False, show_cursor=True)
         yield Static(id="pane-header", markup=False)
         yield RichLog(id="pane", markup=False, highlight=False, wrap=True, max_lines=PANE_LIMIT)
         yield Footer()
@@ -273,6 +298,10 @@ class WatchglassApp(App[None]):
         if name is None:
             self.notify("select a watch to poke", severity="warning")
             return
+        self.poke(name)
+
+    def poke(self, name: str) -> None:
+        """Poke `name` if the service is running; a double-click reaches this without a selection change."""
         if not service_running(self.monitor.paths):
             self.notify("no watchglass service is running", severity="warning")
             return
@@ -282,6 +311,11 @@ class WatchglassApp(App[None]):
             self.notify(f"could not poke {name}: {exc}", severity="error")
             return
         self.notify(f"poke requested: {name}")
+
+    def on_watch_table_poked(self, event: WatchTable.Poked) -> None:
+        self.selected = event.watch
+        self._show_selected()
+        self.poke(event.watch)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value is not None:

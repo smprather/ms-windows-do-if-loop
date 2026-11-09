@@ -342,6 +342,90 @@ def test_p_writes_nothing_when_the_service_is_not_running(xdg, make_watch):
     run_app(monitor, check)
 
 
+def test_a_single_click_selects_without_poking(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        await pilot.click("#watches", offset=(2, 1))
+        await pilot.pause()
+        assert app.selected == "a"
+        assert not xdg.poke_request("a").exists()
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_double_clicking_a_watch_pokes_that_watch(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    make_watch("b", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry(), "b": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        await pilot.press("j")  # select b: the click has to poke the row under it, not the selection
+        await pilot.pause()
+        assert app.selected == "b"
+        assert await pilot.double_click("#watches", offset=(2, 1))  # row 0 sits under the header
+        await pilot.pause()
+        assert xdg.poke_request("a").is_file()
+        assert not xdg.poke_request("b").exists()
+        assert app.selected == "a"
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_double_clicking_the_header_pokes_nothing(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        await pilot.double_click("#watches", offset=(2, 0))  # the header, not a watch
+        await pilot.pause()
+        assert not xdg.poke_request("a").exists()
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_double_clicking_the_blank_fill_right_of_the_columns_pokes_nothing(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        table = app.query_one("#watches", DataTable)
+        # The blank fill right of the last column still carries the row's index, marked out_of_bounds.
+        x = next(x for x in range(table.size.width - 1, 0, -1)
+                 if table.get_style_at(x, 1).meta.get("out_of_bounds"))
+        assert await pilot.double_click("#watches", offset=(x, 1))
+        await pilot.pause()
+        assert not xdg.poke_request("a").exists()
+
+    with running(xdg):
+        monitor.refresh()
+        run_app(monitor, check)
+
+
+def test_double_click_writes_nothing_when_the_service_is_not_running(xdg, make_watch):
+    make_watch("a", config=WATCH_CONFIG)
+    publish(xdg, status_document(watches={"a": entry()}))
+    monitor = loaded(xdg)
+
+    async def check(app, pilot):
+        await pilot.double_click("#watches", offset=(2, 1))
+        await pilot.pause()
+        assert not xdg.poke_request("a").exists()
+
+    run_app(monitor, check)
+
+
 def test_q_quits_the_app(xdg, make_watch):
     make_watch("a", config=WATCH_CONFIG)
     publish(xdg, status_document(watches={"a": entry()}))

@@ -993,8 +993,8 @@ def tui(app: App) -> None:
     Mostly read-only: it never enables or disables a watch and writes no watchglass state, but `p` asks the
     running service to poll the selected watch now (one request file). It is safe beside a running service
     (several at once, even). The arrow keys or j/k select a watch, `a` shows every watch's records, `v`
-    cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `p` pokes the selected
-    watch, `r` re-reads the config, q quits.
+    cycles the pane's verbosity (quiet, normal, verbose), space pauses the pane, `p` (or a double-click
+    on a watch) pokes the selected watch, `r` re-reads the config, q quits.
 
     Needs a terminal: when stdout is not one, use `watchglass status` or `watchglass logs --json` instead.
 
