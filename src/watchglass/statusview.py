@@ -77,6 +77,47 @@ def _until(value: Any, now: float) -> str:
     return "?" if stamp is None else format_duration(max(int(stamp - now), 0))
 
 
+def _failed_reason(last: dict[str, Any]) -> str:
+    """The first failed hook's reason, else the poll's own reason, as text."""
+    results = last.get("results")
+    if isinstance(results, list):
+        for result in results:
+            if isinstance(result, dict) and result.get("status") not in ("ok", None):
+                reason = result.get("reason")
+                if isinstance(reason, str) and reason:
+                    return reason
+    reason = last.get("reason")
+    return reason if isinstance(reason, str) else ""
+
+
+def failure_kind(entry: dict[str, Any]) -> str | None:
+    """A short classification of the last poll's failure, or None when it did not fail.
+
+    A mid-transfer drop, an unreachable destination, a refused overwrite and a rejected credential call for
+    different operator actions, so the label says which one happened instead of repeating the raw reason.
+    """
+    last = entry.get("last_poll")
+    if not isinstance(last, dict) or not last.get("failed"):
+        return None
+    reason = _failed_reason(last).lower()
+    offline = entry.get("offline")
+    if isinstance(offline, dict) and offline.get("permanent"):
+        return "auth rejected"
+    if "authentication failed" in reason or "permission denied (publickey" in reason or "host key verification failed" in reason:
+        return "auth rejected"
+    if "refuses to overwrite" in reason or ("permission denied" in reason and ("dest open" in reason or "remote open" in reason)):
+        return "refused overwrite"
+    if "not reachable" in reason or "no ssh banner" in reason:
+        return "unreachable"
+    if any(word in reason for word in (
+        "connection reset", "connection closed", "connection timed out", "broken pipe", "unexpected eof", "connection lost"
+    )):
+        return "dropped mid-transfer"
+    if "timed out" in reason:
+        return "timed out"
+    return "failed"
+
+
 def in_flight_text(in_flight: dict[str, Any], activity: dict[str, Any] | None, *, now: float) -> str:
     """What a watch is doing right now: the hook, for how long, and what it is transferring."""
     started = _epoch(in_flight.get("started_at"))
@@ -148,6 +189,9 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
             reason = last.get("reason")
             if isinstance(reason, str) and reason:
                 lines.append(f"    waiting: {reason}")
+        failure = failure_kind(entry) if not entry.get("offline") else None
+        if failure is not None:
+            lines.append(f"    last failure: {failure}")
         offline = entry.get("offline")
         if offline:
             detail = f"    offline since {offline['since']}: {offline['reason']}"

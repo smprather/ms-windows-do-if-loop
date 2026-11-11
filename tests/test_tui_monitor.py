@@ -4,6 +4,8 @@ import ast
 import time
 from pathlib import Path
 
+import pytest
+
 from watchglass.locks import hold_lock
 from watchglass.logstore import LogWriter, make_record
 from watchglass.offline import OfflineMarker, iso_time, write_offline
@@ -470,3 +472,55 @@ def test_waiting_does_not_override_offline_or_parked(xdg, make_watch):
         rows = rows_by_name(monitor.status())
     assert rows["a"].state == "parked"
     assert rows["b"].state == "offline"
+
+
+def failed_poll(at, reason, outcome="true"):
+    return {**last_poll(at, outcome=outcome), "failed": True,
+            "results": [{"hook": "on_true", "status": "failed", "reason": reason}]}
+
+
+def test_a_failed_push_says_why_in_the_note(xdg, make_watch):
+    """Issue 44: the last attempt's reason must reach the table, classified, not stay in the log."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(
+        condition=True,
+        last_poll=failed_poll(time.time() - 900, "CommandFailed: command exited 255; stderr: Connection reset by peer"),
+    )}))
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        [row] = monitor.status().watches
+    assert row.state == "online"
+    assert monitor_module.note_text(row) == "last failure: dropped mid-transfer"
+
+
+@pytest.mark.parametrize(
+    ("reason", "kind"),
+    [
+        ("command exited 255; stderr: Connection reset by peer", "dropped mid-transfer"),
+        ('scp: dest open "/in/a.bin": Permission denied', "refused overwrite"),
+        ("u@host: Permission denied (publickey,password).", "auth rejected"),
+        ("oa97ut01:222 is not reachable; files wait", "unreachable"),
+        ("scp timed out after 2h", "timed out"),
+        ("something else broke", "failed"),
+    ],
+)
+def test_the_last_failure_is_classified(reason, kind):
+    entry_data = {"last_poll": failed_poll(time.time(), reason)}
+    assert monitor_module.failure_kind(entry_data) == kind
+
+
+def test_a_running_transfer_note_keeps_the_file_and_adds_the_last_failure(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    publish(xdg, status_document(watches={"a": entry(
+        last_poll=failed_poll(time.time() - 60, "Connection reset by peer"),
+        in_flight={"hook": "on_true", "poll_id": "p1", "target": "recipe push:on_true",
+                   "started_at": iso_time(time.time() - 30)},
+        transfer={"name": "big.bin", "source": "/local/big.bin", "dest": "u@h:/in/big.bin", "size": 4096},
+    )}))
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        [row] = monitor.status().watches
+    assert row.state == "transferring"
+    assert monitor_module.note_text(row) == "big.bin · last failure: dropped mid-transfer"

@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -311,6 +312,8 @@ def test_transfer_progress_and_its_text():
     assert transfer.activity_text(activity) == "pulling a.bin 25% (1 KiB/4 KiB)"
     assert transfer.transfer_progress({"name": "a", "size": 0}) is None
     assert transfer.activity_text({"name": "a.bin", "size": 4096}) == "pushing a.bin (4 KiB)"
+    pushing = {"name": "a.bin", "source": "/s/a.bin", "dest": "u@h:/in/a.bin", "size": 4096, "part_size": 1024}
+    assert transfer.activity_text(pushing) == "pushing a.bin 25% (1 KiB/4 KiB)"
 
 
 def test_activity_path_names_where_a_transfer_writes():
@@ -329,7 +332,7 @@ def test_push_publishes_the_source_and_destination(tmp_path, monkeypatch):
     local.write_bytes(b"data")
     seen = []
 
-    def run(argv, env, timeout, *, options):
+    def run(argv, env, timeout, *, options, on_output=None):
         seen.append(transfer.read_activity(tmp_path))
         return 0, "", "", False
 
@@ -412,7 +415,7 @@ def test_a_refused_overwrite_is_explained_and_can_be_continued(monkeypatch, tmp_
     warnings: list[str] = []
     resumed: list[str] = []
 
-    def fake_copy(source, destination, *, options=None, report=None, warn=None):
+    def fake_copy(source, destination, *, options=None, report=None, warn=None, on_output=None):
         assert options is not None and report is None and warn is not None  # the calling convention, checked
         if destination.path.endswith("a.bin"):  # the upload itself; the marker that follows succeeds
             assert source == local
@@ -574,7 +577,7 @@ def test_a_resumed_partial_that_does_not_verify_is_pulled_again_from_the_start(t
         with open(part, "ab") as handle:
             handle.write(b"wrong")  # the resumed bytes are not the file the sha256 names
 
-    def fake_copy(source, destination, *, options=None, report=None, warn=None):
+    def fake_copy(source, destination, *, options=None, report=None, warn=None, on_output=None):
         calls.append("copy")
         Path(destination.path).write_bytes(data)
 
@@ -634,7 +637,7 @@ def test_the_sftp_resume_command_preserves_times(tmp_path):
 def fake_scp(monkeypatch, *, writes, returncode=1, stderr="local set times: Input/output error"):
     """A stand-in for scp's process: optionally writes the destination, then reports exit code and stderr."""
 
-    def run(argv, env, timeout, *, options):
+    def run(argv, env, timeout, *, options, on_output=None):
         if writes is not None:
             writes.write_bytes(b"data")
         return returncode, "", stderr, False
@@ -692,7 +695,7 @@ PTY_REJECTED = (
 def fake_pty_scp(monkeypatch, console=PTY_REJECTED, returncode=255, writes=None):
     """A pty run's shape: the console text, with stderr empty because the pty merges the streams (issues 29, 30)."""
 
-    def run(argv, env, timeout, *, options):
+    def run(argv, env, timeout, *, options, on_output=None):
         if writes is not None:
             writes.write_bytes(b"data")
         return returncode, console, "", False
@@ -723,7 +726,7 @@ def test_a_pty_rejection_on_stdout_parks_a_resumed_push(tmp_path, monkeypatch):
     replies = iter(
         [(1, "", 'dest open "/in/a.gz": Permission denied\n', False), (255, PTY_REJECTED, "", False)]
     )
-    monkeypatch.setattr(transfer, "_run", lambda argv, env, timeout, *, options: next(replies))
+    monkeypatch.setattr(transfer, "_run", lambda argv, env, timeout, *, options, on_output=None: next(replies))
     with pytest.raises(transfer.TransferAuthFailed) as caught:
         push(local, "me@h:in/", options=ScpOptions(protocol="sftp"), resume=True)
     assert caught.value.permanent_reason == "authentication failed"
@@ -882,3 +885,26 @@ def test_conpty_sftp_without_a_password_prompt_says_so(tmp_path, monkeypatch):
     options = ScpOptions(protocol="sftp", password_env="KW_PW", password_mode="conpty")
     with pytest.raises(TransferFailed, match="without showing a password prompt"):
         transfer._sftp_reput(local, parse_endpoint("u@host:/in/a.gz"), options, None)
+
+
+def test_a_conpty_push_publishes_progress_from_scp(tmp_path, monkeypatch):
+    """Issue 44: scp's console progress meter reaches activity.json, where the TUI's rate/ETA already reads it."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("KW_PW", "s3cret")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    monkeypatch.setenv("WATCHGLASS_RUN_DIR", str(run_dir))
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"x" * 1000)
+    seen = {}
+
+    def fake_run(argv, env, timeout, *, options, on_output=None):
+        assert on_output is not None
+        on_output("a.bin 41% 410 0.0KB/s 00:01 ETA\r")
+        seen.update(json.loads((run_dir / "activity.json").read_text(encoding="utf-8")))
+        return 0, "", "", False
+
+    monkeypatch.setattr(transfer, "_run", fake_run)
+    options = ScpOptions(password_env="KW_PW", password_mode="conpty")
+    transfer.push(local, "u@h:in/", marker="none", options=options)
+    assert seen["part_size"] == 410 and seen["size"] == 1000

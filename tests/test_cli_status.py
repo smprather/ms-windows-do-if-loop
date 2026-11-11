@@ -155,3 +155,30 @@ def test_status_says_waiting_when_the_last_poll_was_unknown(xdg, make_watch):
     assert result.exit_code == 0
     assert re.search(r"^relay-push\s+waiting\s+condition FALSE", result.output, re.M)
     assert f"waiting: {reason}" in result.output
+
+
+def test_status_says_why_the_last_attempt_failed(xdg, make_watch):
+    """Issue 44: a mid-transfer drop is named as such, not left as a bare FAILED."""
+    make_watch("relay-push", config='[hooks]\ncheck = ["true"]\n')
+    write_json_atomic(xdg.status_file, {
+        "format": 1,
+        "service": {"running": True, "pid": 4711, "version": "2026.11.11.1", "started": iso_time(time.time() - 60),
+                    "updated": iso_time(time.time()), "config": "x", "config_error": None, "only": []},
+        "watches": {"relay-push": {
+            "description": "x", "watch_dir": "/w/relay-push", "enabled": True, "interval": 30.0,
+            "condition": True, "failures": 2, "offline": None,
+            "last_poll": {"poll_id": "p1", "at": iso_time(time.time() - 900), "outcome": "true",
+                          "reason": None, "failed": True, "trial": False,
+                          "results": [{"hook": "on_true", "status": "failed",
+                                       "reason": "CommandFailed: command exited 255; stderr: Connection reset by peer"}]},
+            "next_poll": iso_time(time.time() + 10), "config_error": None, "pending_events": 0,
+            "observers": {}, "in_flight": None, "transfer": None,
+        }},
+        "invalid_watches": {}, "problems": [],
+    })
+    ensure_private_dir(xdg.runtime)
+    with hold_lock(xdg.service_lock):
+        result = run("status")
+    assert result.exit_code == 0
+    assert "last true FAILED" in result.output
+    assert "last failure: dropped mid-transfer" in result.output

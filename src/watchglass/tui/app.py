@@ -19,7 +19,7 @@ from watchglass.tui.monitor import Monitor, Status, WatchRow
 
 COLUMNS = ("WATCH", "STATE", "COND", "FAIL", "LAST", "NEXT", "OBS", "NOTE")
 PANE_LIMIT = 2000  # lines the pane widget keeps: a day-old monitor must not grow without bound
-NARROW = 80  # below this, NOTE goes; below NARROWEST, OBS follows
+NARROW = 80  # below this, OBS and FAIL go; below NARROWEST, COND and NEXT follow (NOTE stays: why it is not moving)
 NARROWEST = 68
 LEVEL_NAMES = ("quiet", "normal", "verbose")
 
@@ -125,9 +125,9 @@ class WatchglassApp(App[None]):
 
     def _columns_for(self, width: int) -> tuple[str, ...]:
         if width < NARROWEST:
-            return ("WATCH", "STATE", "COND", "LAST", "NEXT")
+            return ("WATCH", "STATE", "LAST", "NOTE")
         if width < NARROW:
-            return ("WATCH", "STATE", "COND", "FAIL", "LAST", "NEXT")
+            return ("WATCH", "STATE", "COND", "LAST", "NEXT", "NOTE")
         return COLUMNS
 
     def _set_columns(self, columns: tuple[str, ...]) -> None:

@@ -740,15 +740,17 @@ def _sftp_put(local: Path, target: Endpoint, options: ScpOptions, report: Report
 
 def _run(
     argv: list[str], env: dict[str, str], timeout: float | None, *, options: ScpOptions,
-    commands: Sequence[str] = (),
+    commands: Sequence[str] = (), on_output: Callable[[str], None] | None = None,
 ) -> tuple[int | None, str, str, bool]:
     if options.password_mode == "conpty":
         from watchglass.conpty import run as conpty_run  # imported only for this mode (a default Windows dependency)
 
+        extra: dict[str, Any] = {}
         if commands:
-            return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env,
-                              commands=commands)
-        return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env)
+            extra["commands"] = commands
+        if on_output is not None:
+            extra["on_output"] = on_output
+        return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env, **extra)
     try:
         if platform.IS_WINDOWS:
             process = platform.start_process(
@@ -796,12 +798,28 @@ def _askpass_dir() -> str | None:
 
 
 ACTIVITY = "activity.json"
+_PROGRESS = re.compile(r"(?<![\d.])(\d{1,3})%")
 
 
 def _activity_file() -> Path | None:
     """Where a transfer publishes what it is doing: the hook's run dir, when there is one."""
     run_dir = os.environ.get("WATCHGLASS_RUN_DIR")
     return Path(run_dir) / ACTIVITY if run_dir and os.path.isdir(run_dir) else None
+
+
+def update_activity(**fields: Any) -> None:
+    """Merge fields into the running transfer's activity file (best effort: progress never fails a transfer)."""
+    path = _activity_file()
+    if path is None:
+        return
+    try:
+        activity = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(activity, dict):
+            return
+        activity.update(fields)
+        write_json_atomic(path, activity)
+    except (OSError, ValueError):
+        pass
 
 
 @contextlib.contextmanager
@@ -824,7 +842,7 @@ def _activity(**fields: Any) -> Generator[None]:
 
 
 def read_activity(run_dir: Path) -> dict[str, Any] | None:
-    """What a hook in this run dir is transferring, with the part's current size; None when nothing is."""
+    """What a hook in this run dir is transferring, with the current transferred size; None when nothing is."""
     try:
         activity = json.loads((run_dir / ACTIVITY).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -841,7 +859,7 @@ def read_activity(run_dir: Path) -> dict[str, Any] | None:
 
 
 def transfer_progress(activity: dict[str, Any]) -> float | None:
-    """How much of a pull has arrived (part_size / size), or None when that cannot be told."""
+    """How much of a transfer has arrived (part_size / size), or None when that cannot be told."""
     size, part_size = activity.get("size"), activity.get("part_size")
     if not isinstance(size, int) or not isinstance(part_size, int) or size <= 0:
         return None
@@ -849,18 +867,17 @@ def transfer_progress(activity: dict[str, Any]) -> float | None:
 
 
 def activity_text(activity: dict[str, Any]) -> str:
-    """One line for `status` and the TUI: `pulling psg-export.gz 74% (2.6 GiB/3.7 GiB)`."""
+    """One line for `status` and the TUI: `pulling psg-export.gz 74% (2.6 GiB/3.7 GiB)`; a push says pushing."""
     name = str(activity.get("name") or "?")
     size = activity.get("size")
-    if not isinstance(activity.get("part"), str):
-        return f"pushing {name}" + (f" ({format_bytes(size)})" if isinstance(size, int) else "")
+    verb = "pulling" if isinstance(activity.get("part"), str) else "pushing"
     progress = transfer_progress(activity)
     if progress is None:
-        return f"pulling {name}"
+        return f"{verb} {name}" + (f" ({format_bytes(size)})" if isinstance(size, int) else "")
     if isinstance(size, int) and isinstance(activity.get("part_size"), int):
-        return (f"pulling {name} {progress * 100:.0f}% "
+        return (f"{verb} {name} {progress * 100:.0f}% "
                 f"({format_bytes(activity['part_size'])}/{format_bytes(size)})")
-    return f"pulling {name} {progress * 100:.0f}%"
+    return f"{verb} {name} {progress * 100:.0f}%"
 
 
 def activity_path(activity: dict[str, Any]) -> str | None:
@@ -881,6 +898,7 @@ def copy(
     options: ScpOptions = ScpOptions(),
     report: Report | None = None,
     warn: Callable[[str], None] | None = None,
+    on_output: Callable[[str], None] | None = None,
 ) -> None:
     """Copy one file with scp. Raises CommandFailed when scp fails; a rejected credential or host key raises TransferAuthFailed (a TransferFailed with `permanent_reason`), a remote source that is gone raises TransferMissing (a TransferFailed), and a transfer that cannot be attempted raises TransferFailed.
 
@@ -888,7 +906,8 @@ def copy(
     times (`set times:` in scp's stderr, as Windows' OpenSSH does after a pull whose bytes arrived) is a warning
     rather than a failure when the data is known to have landed: for a local destination that means the file is
     there, and a remote destination cannot be checked without another ssh call — scp sets the times last, so the
-    shape is the evidence. `warn` is told; the copy is kept.
+    shape is the evidence. `warn` is told; the copy is kept. `on_output` receives the console's output as it
+    arrives when the transfer runs under a pseudo-console (conpty), which is where scp's progress meter lives.
     """
     src, dst = _endpoint(source), _endpoint(destination)
     argv = scp_argv(src, dst, options, openssh_version(_ssh_beside(options.scp_command[0])))
@@ -899,8 +918,9 @@ def copy(
             raise TransferFailed(f"no time left for scp {src.scp_arg()} -> {dst.scp_arg()} (the deadline has passed)")
         limit = left if limit is None else min(limit, left)
     started = time.monotonic()
+    extra = {"on_output": on_output} if on_output is not None else {}
     with _transfer_env(options) as env:
-        returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+        returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options, **extra)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
@@ -1096,8 +1116,14 @@ def push(
     with _activity(  # status.json and the TUI read this
         name=local.name, size=size, source=str(local), dest=target.scp_arg()
     ):
+        def note_progress(text: str) -> None:
+            matches = _PROGRESS.findall(text)
+            if matches and size:
+                percent = min(int(matches[-1]), 100)
+                update_activity(part_size=size * percent // 100)
+
         try:
-            copy(local, target, options=options, report=report, warn=warn)
+            copy(local, target, options=options, report=report, warn=warn, on_output=note_progress)
         except CommandFailed as exc:
             if not _refused_overwrite(exc, local.name):
                 raise

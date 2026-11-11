@@ -490,6 +490,8 @@ def status(app: App, name: str | None, as_json: bool) -> None:
     Per watch: online, waiting (the last check answered unknown, e.g. an unreachable destination; its reason
     is printed below), offline (with the reason and last failure), parked (enabled = false) or idle (the
     service is not running), the TRUE/FALSE condition, consecutive failures, the last poll and the next one.
+    A failed last attempt is classified below the row (dropped mid-transfer, unreachable, refused overwrite,
+    auth rejected, timed out).
     Also lists config problems and orphaned state directories (state of a watch that no longer exists).
     The service refreshes this every reload_interval.
 

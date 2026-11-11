@@ -263,8 +263,8 @@ def test_the_screen_drops_columns_when_it_is_narrow(xdg, make_watch):
     monitor = Monitor(xdg, xdg.config_file)
 
     async def check(app, pilot):
-        assert app.table_columns == ("WATCH", "STATE", "COND", "LAST", "NEXT")
-        assert len(rows(app)[0]) == 5
+        assert app.table_columns == ("WATCH", "STATE", "LAST", "NOTE")
+        assert len(rows(app)[0]) == 4
 
     with running(xdg):
         monitor.refresh()

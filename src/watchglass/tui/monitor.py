@@ -20,7 +20,7 @@ from watchglass.durations import format_duration
 from watchglass.logquery import LogFilter, follow_log, select_records
 from watchglass.output import NORMAL, format_record, record_level, sanitize
 from watchglass.paths import Paths
-from watchglass.statusview import collect_status, read_status, service_running, watch_state
+from watchglass.statusview import collect_status, failure_kind, read_status, service_running, watch_state
 
 STALE_AFTER = 5.0  # two missed service ticks: the status is no longer live
 DISCOVERY_EVERY = 5.0  # how often the config on disk is re-read
@@ -381,6 +381,14 @@ def _note(entry: dict[str, Any], state: str) -> str:
         last = entry.get("last_poll")
         reason = last.get("reason") if isinstance(last, dict) else None
         return sanitize(f"waiting: {reason}") if isinstance(reason, str) and reason else "waiting"
+    failure = failure_kind(entry)
+    if state == "transferring":
+        activity = entry.get("transfer")
+        name = activity.get("name") if isinstance(activity, dict) else None
+        text = sanitize(name) if isinstance(name, str) and name else ""
+        return f"{text} · last failure: {failure}" if failure else text
+    if failure is not None:
+        return f"last failure: {failure}"
     if pending > 0:
         return f"+{pending} events"
     if state == "transferring":

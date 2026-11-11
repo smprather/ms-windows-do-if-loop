@@ -113,3 +113,12 @@ def test_sftp_commands_are_typed_at_the_interactive_prompt(monkeypatch):
     )
     assert process.typed == ["s3cret\r", 'reput "C:/a.gz" "/in/a.gz"\rbye\r']
     assert exit_code == 0 and not timed_out
+
+
+def test_output_chunks_reach_the_callback(monkeypatch):
+    """A push reads scp's progress meter from these chunks while it runs (issue 44)."""
+    process = FakePty(PROMPT, "a.bin 41% 410 0.0KB/s 00:01 ETA\r")
+    fake_winpty(monkeypatch, process)
+    seen = []
+    conpty.run(["scp"], "s3cret", limit=5, on_output=seen.append)
+    assert any("41%" in chunk for chunk in seen)

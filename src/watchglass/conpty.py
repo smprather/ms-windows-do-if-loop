@@ -12,7 +12,7 @@ import contextlib
 import os
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from importlib import import_module
 
 # What scp, ssh and keyboard-interactive prompts look like: "... password:", "Password for user@host:".
@@ -51,14 +51,16 @@ def run(
     limit: float | None = None,
     env: Mapping[str, str] | None = None,
     commands: Sequence[str] = (),
+    on_output: Callable[[str], None] | None = None,
 ) -> tuple[int | None, str, str, bool]:
     """Run argv under a pty, type the password at its prompt, and return (exit, stdout, stderr, timed_out).
 
     `commands` are typed at sftp's interactive prompt once it appears (one per line, then `bye`), which is how
-    a conpty resume runs: sftp's batch mode suppresses the password prompt this mode depends on. The pty merges
-    the command's stderr into stdout, so stderr is always empty. Nothing read back ever contains the password:
-    it is scrubbed anyway. `limit` is a whole-run timeout in seconds (None: wait forever); a run that has to be
-    killed for it comes back with timed_out=True, like `transfer._run`.
+    a conpty resume runs: sftp's batch mode suppresses the password prompt this mode depends on. `on_output`
+    receives each chunk as it arrives (already scrubbed), which is where a push's scp progress meter can be read.
+    The pty merges the command's stderr into stdout, so stderr is always empty. Nothing read back ever contains
+    the password: it is scrubbed anyway. `limit` is a whole-run timeout in seconds (None: wait forever); a run
+    that has to be killed for it comes back with timed_out=True, like `transfer._run`.
     """
     process = _spawn(argv, env if env is not None else os.environ)
     collected: list[str] = []
@@ -75,6 +77,9 @@ def run(
             if chunk:
                 collected.append(chunk)
                 text = "".join(collected)
+                if on_output is not None:
+                    with contextlib.suppress(Exception):  # best effort: progress must never fail a transfer
+                        on_output(scrub(chunk, password))
                 if not typed and PROMPT.search(text):
                     process.write(password + "\r")
                     typed = True
