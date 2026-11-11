@@ -43,6 +43,9 @@ def register_script(executable: str, arguments: str) -> str:
             f"Register-ScheduledTask -TaskName {_quote(TASK_NAME)} -Action $action -Trigger $trigger "
             "-Settings $settings -Principal $principal -Force | Out-Null",
             remove_shortcut_script(),
+            # Remove-Item with SilentlyContinue still makes the last command "fail" when there is no shortcut,
+            # which PowerShell turns into exit 1; registration itself succeeded, so say so (issue 45).
+            "exit 0",
         ]
     )
 
@@ -89,6 +92,7 @@ def unregister_script() -> str:
         [
             f"Unregister-ScheduledTask -TaskName {_quote(TASK_NAME)} -Confirm:$false -ErrorAction SilentlyContinue",
             f"Remove-Item -LiteralPath {_SHORTCUT} -ErrorAction SilentlyContinue",
+            "exit 0",  # both removals are best effort; their "not found" must not fail the uninstall
         ]
     )
 
