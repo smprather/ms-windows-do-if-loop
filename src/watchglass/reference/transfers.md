@@ -84,6 +84,11 @@ and restart the service (a failed load is cached until the config or the service
 `watchglass kit` transfer with `password_mode = "conpty"` is checked when it runs, not by `validate`. And
 `password_mode = "askpass"` (the default) is exactly the behaviour above.
 
+With `resume`, conpty runs sftp **interactively** and types the `reget`/`reput`/`put` command at its `sftp>`
+prompt: sftp's `-b` batch mode suppresses the password prompt, so the batch form would never authenticate. The
+console is still checked for sftp's error lines (an interactive sftp exits 0 after a failed command), and a run
+that never shows the password prompt says so instead of reporting a bare `Connection closed`.
+
 A last trap for the same destination: **mod_sftp may ignore a server-side `authorized_keys`** unless the
 administrator sets `SFTPAuthorizedUserKeys` (or the equivalent for that build), so a key path that "should"
 work may still be refused — check the server's SFTP configuration before concluding the key is wrong.

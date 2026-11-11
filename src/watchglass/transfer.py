@@ -313,11 +313,13 @@ def _unescaped_for_sftp(path: str) -> str:
     return "".join(out)
 
 
-def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
-    """The sftp command line for one batch run (reget continues a pull, reput a push; scp does neither).
+def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path | None = None) -> list[str]:
+    """The sftp command line for one run (reget continues a pull, reput a push; scp does neither).
 
     sftp takes the scp options it shares (-o, -i, -P, -F is part of ssh_options) and reads its commands from
     `batch`. The program is the `sftp` beside `scp_command[0]`, so a watch that names its scp names its sftp.
+    With `batch=None` sftp stays interactive: its batch mode suppresses the password prompt that
+    `password_mode = "conpty"` has to answer, so that mode types the command at the `sftp>` prompt instead.
     """
     argv = [_sftp_beside(options.scp_command[0]), *options.ssh_options]
     argv += ["-o", "NumberOfPasswordPrompts=1"] if options.password_env else ["-o", "BatchMode=yes"]
@@ -330,7 +332,9 @@ def sftp_argv(host: Endpoint, options: ScpOptions, batch: Path) -> list[str]:
         argv += ["-P", str(port)]
     if options.preserve_mtime:
         argv.append("-p")
-    argv += ["-q", "-b", str(batch)]
+    argv.append("-q")
+    if batch is not None:
+        argv += ["-b", str(batch)]
     name = f"{host.user}@{host.host}" if host.user else str(host.host)
     return [*argv, name]
 
@@ -376,6 +380,13 @@ _MISSING = re.compile(r"no such file or directory|the system cannot find the (?:
 _LOCAL_OPEN = re.compile(r"\bopen local\b", re.IGNORECASE)
 _SCP_SAYS = re.compile(r"^(?:[A-Za-z]:[^\r\n:]*[\\/])?scp(?:\.exe)?:", re.IGNORECASE | re.MULTILINE)
 _SFTP_NOT_FOUND = re.compile(r'File\s+"(.*)"\s+not found', re.IGNORECASE)
+# Interactive sftp exits 0 after a failed command, so its console is the only failure signal. Prompt/command
+# echoes start with "sftp> " and are ignored: a path in them is not an error.
+_SFTP_ERROR = re.compile(
+    r"^(?!\s*sftp>)[^\n]*(?:Couldn't|Could not|Permission denied|No such file or directory|not found|"
+    r"Invalid argument|remote open|local open|stat remote|stat local|Failure)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _source_missing(text: str, destination: Endpoint, source: Endpoint) -> bool:
@@ -423,6 +434,23 @@ def _withdrawn(source: Endpoint, text: str) -> TransferMissing:
     """The error for a source file that is gone (its scp/sftp line is kept in the message)."""
     tail = (text or "").strip().splitlines()
     return TransferMissing(f"{source.scp_arg()} is gone from the source: {tail[-1] if tail else 'no such file or directory'}")
+
+
+def _sftp_failure(
+    argv: Sequence[str], returncode: int | None, stderr: str, stdout: str, options: ScpOptions
+) -> CommandFailed | TransferFailed:
+    """The error for a failed sftp run; conpty says when it never saw the password prompt it exists to answer."""
+    console = _console_text(stderr, stdout)
+    if options.password_mode == "conpty" and returncode != 0 and not _SFTP_ERROR.search(console):
+        from watchglass.conpty import PROMPT  # imported only for this diagnosis
+
+        if not PROMPT.search(console):
+            tail = console.strip().splitlines()[-3:]
+            return TransferFailed(
+                f"sftp exited {returncode} without showing a password prompt "
+                f"(password_mode = \"conpty\" had nothing to type): {' | '.join(tail) or 'no output'}"
+            )
+    return _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
 
 
 @dataclass(frozen=True)
@@ -639,66 +667,87 @@ def _discard_part(part: Path, name: str, warn: Callable[[str], None] | None) -> 
 def _sftp_reget(source: Endpoint, part: Path, options: ScpOptions, report: Report | None) -> None:
     """Continue a partial pull with sftp's reget: what scp itself cannot do (`resume` in the pull recipe)."""
     limit = _deadline_limit(options, "sftp", f"{source.scp_arg()} -> {part}")
+    text = sftp_reget_batch(source, part)
     with tempfile.TemporaryDirectory(prefix="watchglass-sftp-", dir=_askpass_dir()) as work:
-        batch = Path(work) / "reget.batch"
-        batch.write_text(sftp_reget_batch(source, part), encoding="utf-8")
-        argv = sftp_argv(source, options, batch)
+        if options.password_mode == "conpty":
+            argv, commands = sftp_argv(source, options), tuple(text.splitlines())
+        else:
+            batch = Path(work) / "reget.batch"
+            batch.write_text(text, encoding="utf-8")
+            argv, commands = sftp_argv(source, options, batch), ()
         started = time.monotonic()
         with _transfer_env(options) as env:
-            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+            extra = {"commands": commands} if commands else {}
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options, **extra)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {source.scp_arg()} -> {part}")
-    if returncode != 0:
-        console = _console_text(stderr, stdout)
-        if _reget_source_missing(console, source):
-            raise _withdrawn(source, console)
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
+    console = _console_text(stderr, stdout)
+    if _reget_source_missing(console, source):
+        raise _withdrawn(source, console)
+    if returncode != 0 or _SFTP_ERROR.search(console):
+        raise _sftp_failure(argv, returncode, stderr, stdout, options)
 
 
 def _sftp_reput(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
     """Continue a partial upload with sftp's reput, for a destination that refuses to overwrite (see `resume`)."""
     limit = _deadline_limit(options, "sftp", f"{local} -> {target.scp_arg()}")
+    text = sftp_reput_batch(local, target)
     with tempfile.TemporaryDirectory(prefix="watchglass-sftp-", dir=_askpass_dir()) as work:
-        batch = Path(work) / "reput.batch"
-        batch.write_text(sftp_reput_batch(local, target), encoding="utf-8")
-        argv = sftp_argv(target, options, batch)
+        if options.password_mode == "conpty":
+            argv, commands = sftp_argv(target, options), tuple(text.splitlines())
+        else:
+            batch = Path(work) / "reput.batch"
+            batch.write_text(text, encoding="utf-8")
+            argv, commands = sftp_argv(target, options, batch), ()
         started = time.monotonic()
         with _transfer_env(options) as env:
-            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+            extra = {"commands": commands} if commands else {}
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options, **extra)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
-    if returncode != 0:
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
+    console = _console_text(stderr, stdout)
+    if returncode != 0 or _SFTP_ERROR.search(console):
+        raise _sftp_failure(argv, returncode, stderr, stdout, options)
 
 
 def _sftp_put(local: Path, target: Endpoint, options: ScpOptions, report: Report | None) -> None:
     """Upload `local` to `target` whole with sftp's put (the non-resuming side of `upload`)."""
     limit = _deadline_limit(options, "sftp", f"{local} -> {target.scp_arg()}")
+    text = sftp_put_batch(local, target)
     with tempfile.TemporaryDirectory(prefix="watchglass-sftp-", dir=_askpass_dir()) as work:
-        batch = Path(work) / "put.batch"
-        batch.write_text(sftp_put_batch(local, target), encoding="utf-8")
-        argv = sftp_argv(target, options, batch)
+        if options.password_mode == "conpty":
+            argv, commands = sftp_argv(target, options), tuple(text.splitlines())
+        else:
+            batch = Path(work) / "put.batch"
+            batch.write_text(text, encoding="utf-8")
+            argv, commands = sftp_argv(target, options, batch), ()
         started = time.monotonic()
         with _transfer_env(options) as env:
-            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options)
+            extra = {"commands": commands} if commands else {}
+            returncode, stdout, stderr, timed_out = _run(argv, env, limit, options=options, **extra)
     if report is not None:
         report(argv, returncode, timed_out, time.monotonic() - started, stdout, stderr)
     if timed_out:
         raise TransferFailed(f"sftp timed out after {format_duration(limit or 0)}: {local} -> {target.scp_arg()}")
-    if returncode != 0:
-        raise _failed_command(argv, returncode if returncode is not None else -1, stderr, stdout)
+    console = _console_text(stderr, stdout)
+    if returncode != 0 or _SFTP_ERROR.search(console):
+        raise _sftp_failure(argv, returncode, stderr, stdout, options)
 
 
 def _run(
-    argv: list[str], env: dict[str, str], timeout: float | None, *, options: ScpOptions
+    argv: list[str], env: dict[str, str], timeout: float | None, *, options: ScpOptions,
+    commands: Sequence[str] = (),
 ) -> tuple[int | None, str, str, bool]:
     if options.password_mode == "conpty":
         from watchglass.conpty import run as conpty_run  # imported only for this mode (a default Windows dependency)
 
+        if commands:
+            return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env,
+                              commands=commands)
         return conpty_run(argv, env.get(options.password_env or "", ""), limit=timeout, env=env)
     try:
         if platform.IS_WINDOWS:

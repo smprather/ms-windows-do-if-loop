@@ -12,7 +12,8 @@ import sys
 
 import pytest
 
-from watchglass import conpty, winsched
+from scp_server import PASSWORD, ScpServer
+from watchglass import conpty, transfer, winsched
 
 pytestmark = [
     pytest.mark.skipif(sys.platform != "win32", reason="needs Windows"),
@@ -79,3 +80,26 @@ def test_conpty_types_the_password_and_scrubs_it(tmp_path):
     assert stderr == ""
     assert "read ***" in output
     assert "s3cret" not in output
+
+
+def test_conpty_sftp_resume_authenticates_at_the_prompt(tmp_path, monkeypatch):
+    """Issue 43: a real password-only sftp, typed at ConPTY, continues the partial instead of dying at login."""
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"data")
+    root = tmp_path / "remote"
+    root.mkdir()
+    (root / "a.bin").write_bytes(b"da")  # the prefix an earlier upload left behind
+    server = ScpServer(root, tmp_path).start()
+    try:
+        monkeypatch.setenv("KW_TEST_PASSWORD", PASSWORD)
+        options = transfer.ScpOptions(
+            protocol="sftp",
+            password_env="KW_TEST_PASSWORD",
+            password_mode="conpty",
+            port=server.port,
+            known_hosts=server.known_hosts,
+        )
+        transfer.upload(local, "u@127.0.0.1:/a.bin", options=options, resume=True)
+        assert (root / "a.bin").read_bytes() == b"data"
+    finally:
+        server.stop()

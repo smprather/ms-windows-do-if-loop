@@ -17,6 +17,9 @@ from importlib import import_module
 
 # What scp, ssh and keyboard-interactive prompts look like: "... password:", "Password for user@host:".
 PROMPT = re.compile(r"password[^:\n]*:\s*$", re.IGNORECASE | re.MULTILINE)
+# sftp's interactive prompt. Batch mode (-b) suppresses the password prompt this module exists to answer, so
+# sftp runs interactively under conpty and its resume command is typed here instead (issue 43).
+READY = re.compile(r"sftp>\s*$", re.IGNORECASE | re.MULTILINE)
 READ_SIZE = 4096
 POLL = 0.01
 
@@ -47,17 +50,21 @@ def run(
     *,
     limit: float | None = None,
     env: Mapping[str, str] | None = None,
+    commands: Sequence[str] = (),
 ) -> tuple[int | None, str, str, bool]:
     """Run argv under a pty, type the password at its prompt, and return (exit, stdout, stderr, timed_out).
 
-    The pty merges the command's stderr into stdout, so stderr is always empty. Nothing read back ever contains
-    the password: it is scrubbed anyway. `limit` is a whole-run timeout in seconds (None: wait forever); a run
-    that has to be killed for it comes back with timed_out=True, like `transfer._run`.
+    `commands` are typed at sftp's interactive prompt once it appears (one per line, then `bye`), which is how
+    a conpty resume runs: sftp's batch mode suppresses the password prompt this mode depends on. The pty merges
+    the command's stderr into stdout, so stderr is always empty. Nothing read back ever contains the password:
+    it is scrubbed anyway. `limit` is a whole-run timeout in seconds (None: wait forever); a run that has to be
+    killed for it comes back with timed_out=True, like `transfer._run`.
     """
     process = _spawn(argv, env if env is not None else os.environ)
     collected: list[str] = []
     deadline = None if limit is None else time.monotonic() + limit
     typed = False
+    fed = False
     timed_out = False
     try:
         while True:
@@ -67,9 +74,13 @@ def run(
                 chunk = ""
             if chunk:
                 collected.append(chunk)
-                if not typed and PROMPT.search("".join(collected)):
+                text = "".join(collected)
+                if not typed and PROMPT.search(text):
                     process.write(password + "\r")
                     typed = True
+                if commands and not fed and READY.search(text):
+                    process.write("".join(f"{command}\r" for command in (*commands, "bye")))
+                    fed = True
             if not process.isalive():
                 break
             if deadline is not None and time.monotonic() >= deadline:

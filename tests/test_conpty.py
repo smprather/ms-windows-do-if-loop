@@ -102,3 +102,14 @@ def test_the_missing_pywinpty_says_what_to_install(monkeypatch):
 def test_scrub_removes_the_password():
     assert conpty.scrub("pw: s3cret\n", "s3cret") == "pw: ***\n"
     assert conpty.scrub("nothing here", "") == "nothing here"
+
+
+def test_sftp_commands_are_typed_at_the_interactive_prompt(monkeypatch):
+    """Batch mode (-b) suppresses the password prompt, so a conpty resume types its command at `sftp>`."""
+    process = FakePty(PROMPT, "sftp> ")
+    fake_winpty(monkeypatch, process)
+    exit_code, output, _, timed_out = conpty.run(
+        ["sftp", "u@host"], "s3cret", limit=5, commands=['reput "C:/a.gz" "/in/a.gz"']
+    )
+    assert process.typed == ["s3cret\r", 'reput "C:/a.gz" "/in/a.gz"\rbye\r']
+    assert exit_code == 0 and not timed_out

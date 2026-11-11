@@ -824,3 +824,61 @@ def test_probe_ssh_requires_an_ssh_banner():
         probe.bind(("127.0.0.1", 0))
         closed = probe.getsockname()[1]
     assert transfer.probe_ssh("127.0.0.1", closed, timeout=2) == transfer.SshProbe(False, None)
+
+
+def test_interactive_sftp_omits_the_batch_file(tmp_path, monkeypatch):
+    """sftp's -b suppresses the password prompt conpty answers, so that mode runs sftp interactively (issue 43)."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    options = ScpOptions(protocol="sftp", password_env="KW_PW", password_mode="conpty")
+    argv = transfer.sftp_argv(parse_endpoint("u@host:/a.gz"), options)
+    assert "-b" not in argv and "-q" in argv
+    assert ["-o", "NumberOfPasswordPrompts=1"] == argv[1:3]
+
+
+def test_conpty_resume_feeds_the_command_instead_of_a_batch(tmp_path, monkeypatch):
+    """A conpty resume must reach sftp's prompt and type the reput command there (issue 43)."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("KW_PW", "s3cret")
+    local = tmp_path / "a.gz"
+    local.write_bytes(b"data")
+    target = parse_endpoint("u@host:/in/a.gz")
+    seen = {}
+
+    def fake_run(argv, env, timeout, *, options, commands=()):
+        seen.update(argv=argv, commands=commands)
+        return 0, "sftp> ", "", False
+
+    monkeypatch.setattr(transfer, "_run", fake_run)
+    options = ScpOptions(protocol="sftp", password_env="KW_PW", password_mode="conpty")
+    transfer._sftp_reput(local, target, options, None)
+    assert "-b" not in seen["argv"]
+    assert seen["commands"] == tuple(transfer.sftp_reput_batch(local, target).splitlines())
+
+
+def test_an_interactive_sftp_error_is_a_failure_even_with_exit_zero(tmp_path, monkeypatch):
+    """Interactive sftp exits 0 after a failed command, so its console is what decides (issue 43)."""
+    local = tmp_path / "a.gz"
+    local.write_bytes(b"data")
+
+    def fake_run(argv, env, timeout, *, options, commands=()):
+        return 0, 'sftp> reput "/a.gz" "/in/a.gz"\nCouldn\'t write to remote file "/in/a.gz": Failure\n', "", False
+
+    monkeypatch.setattr(transfer, "_run", fake_run)
+    with pytest.raises(transfer.CommandFailed, match="Couldn't write"):
+        transfer._sftp_reput(local, parse_endpoint("u@host:/in/a.gz"), ScpOptions(protocol="sftp"), None)
+
+
+def test_conpty_sftp_without_a_password_prompt_says_so(tmp_path, monkeypatch):
+    """A bare 'Connection closed' must not read like a network fault when conpty never saw a prompt (issue 43)."""
+    monkeypatch.setattr(transfer.platform, "IS_WINDOWS", True)
+    monkeypatch.setenv("KW_PW", "s3cret")
+    local = tmp_path / "a.gz"
+    local.write_bytes(b"data")
+
+    def fake_run(argv, env, timeout, *, options, commands=()):
+        return 255, "Connection closed\n", "", False
+
+    monkeypatch.setattr(transfer, "_run", fake_run)
+    options = ScpOptions(protocol="sftp", password_env="KW_PW", password_mode="conpty")
+    with pytest.raises(TransferFailed, match="without showing a password prompt"):
+        transfer._sftp_reput(local, parse_endpoint("u@host:/in/a.gz"), options, None)
