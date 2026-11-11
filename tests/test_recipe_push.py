@@ -163,3 +163,28 @@ def test_keep_remembers_what_was_pushed(make_watch, server, tmp_path, xdg):
     assert first.outcome is Outcome.TRUE and path.exists()
     assert sorted(p.name for p in server.root.iterdir()) == ["c.tar.gz"]
     assert poll(xdg, watch, first.after).outcome is Outcome.FALSE
+
+
+def test_banner_probe_accepts_a_real_ssh_server(make_watch, server, tmp_path, xdg):
+    staged(tmp_path)
+    watch = push_watch(make_watch, server, tmp_path, 'reachable_probe = "banner"\nreachable_timeout = "5s"\n')
+    report = poll(xdg, watch)
+    assert report.outcome is Outcome.TRUE and not report.failed, report.reason
+    assert (server.root / "c.tar.gz").read_bytes() == b"payload"
+
+
+def test_banner_probe_waits_when_tcp_connects_but_no_banner_arrives(make_watch, server, tmp_path, xdg):
+    """A VPN endpoint that accepts TCP while the far side is unusable is unknown, not a failed transfer (issue 41)."""
+    path = staged(tmp_path)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        watch = push_watch(
+            make_watch, server, tmp_path,
+            f'reachable_probe = "banner"\nreachable_port = {port}\nreachable_timeout = "1s"\n',
+        )
+        report = poll(xdg, watch)
+    assert report.outcome is Outcome.UNKNOWN and not report.failed
+    assert "accepted a connection but sent no SSH banner" in report.reason
+    assert path.exists() and not (server.root / "c.tar.gz").exists()

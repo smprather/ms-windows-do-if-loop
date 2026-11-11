@@ -216,7 +216,9 @@ def on_true(ctx: Ctx) -> None:
                 # A fair share of what is left, so one slow file cannot starve the rest of the queue (`file_timeout`
                 # caps it harder). A file that fails or runs out of its share is logged and the queue carries on.
                 budget = file_budget(ctx.remaining, len(items) - index, settings["file_timeout"])
-                part = Path(settings["local_dir"]) / f".{Path(item['path']).name}.part"
+                name = Path(item["path"]).name
+                target = Path(settings["local_dir"]) / name
+                part = Path(settings["local_dir"]) / f".{name}.part"
                 resumed = 0
                 if settings["resume"]:
                     with contextlib.suppress(OSError):
@@ -227,10 +229,11 @@ def on_true(ctx: Ctx) -> None:
                         f"from {settings['remote']}",
                         name=item["name"], size=item["size"], offset=resumed, remote=settings["remote"],
                     )
-                else:
+                elif not target.exists():
                     ctx.event(f"pulling {item['name']} ({format_bytes(item['size'])}) from {settings['remote']}",
                               name=item["name"], size=item["size"], remote=settings["remote"])
                 started = time.monotonic()
+                accepted: list[Path] = []
                 try:
                     final = ctx.transfer.pull(
                         f"{settings['remote']}:{item['path']}",
@@ -240,6 +243,7 @@ def on_true(ctx: Ctx) -> None:
                         on_conflict=settings["on_conflict"],
                         resume=settings["resume"],
                         deadline=time.time() + budget,
+                        on_skip=accepted.append,
                         **options,
                     )
                 except TransferAuthFailed:
@@ -279,9 +283,15 @@ def on_true(ctx: Ctx) -> None:
                     fresh.append(entry)
                 pulled.add(item["key"])
                 pulled_now += 1
-                duration = time.monotonic() - started
-                ctx.event(f"pulled {item['name']} ({format_bytes(item['size'])}) in {duration:.1f}s",
-                          local=str(final), size=item["size"], duration=round(duration, 3))
+                if accepted:
+                    ctx.event(
+                        f"{item['name']} already present, verified (size and sha256 match); nothing transferred",
+                        local=str(accepted[0]), size=item["size"], skipped=True,
+                    )
+                else:
+                    duration = time.monotonic() - started
+                    ctx.event(f"pulled {item['name']} ({format_bytes(item['size'])}) in {duration:.1f}s",
+                              local=str(final), size=item["size"], duration=round(duration, 3))
         if pulled_now:
             cleanup_parts(ctx, Path(settings["local_dir"]), settings["part_max_age"])
     except Exception as exc:  # deletes below still run for what was pulled; the error is raised after them

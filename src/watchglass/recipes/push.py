@@ -62,7 +62,15 @@ def settled_files(settings: Mapping[str, Any]) -> list[Path]:
 def check(ctx: Ctx) -> tuple[bool, list[str]]:
     settings = ctx.settings
     host, port = reachable(settings)
-    if not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
+    if settings["reachable_probe"] == "banner":
+        probe = ctx.transfer.ssh_probe(host, port, settings["reachable_timeout"])
+        if not probe.connected:
+            raise Unknown(f"{host}:{port} is not reachable; files wait in {settings['local_dir']}")
+        if probe.banner is None:
+            raise Unknown(
+                f"{host}:{port} accepted a connection but sent no SSH banner; files wait in {settings['local_dir']}"
+            )
+    elif not ctx.transfer.tcp_open(host, port, settings["reachable_timeout"]):
         raise Unknown(f"{host}:{port} is not reachable; files wait in {settings['local_dir']}")
     pushed = ctx.ledger(LEDGER) if settings["after"] == "keep" else None
     files = []

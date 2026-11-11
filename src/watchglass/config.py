@@ -22,7 +22,7 @@ from watchglass.ctx import LEDGER_NAME
 from watchglass.durations import DurationError, format_duration, parse_duration
 from watchglass.hooks import HOOK_NAMES, WATCH_PY
 from watchglass.paths import Paths
-from watchglass.transfer import CONFLICTS, MARKERS, PROTOCOLS, parse_endpoint, with_known_hosts
+from watchglass.transfer import CONFLICTS, MARKERS, PROBES, PROTOCOLS, parse_endpoint, with_known_hosts
 
 CONFIG_NAME = "config.toml"
 
@@ -443,6 +443,13 @@ RECIPE_SETTINGS: dict[str, tuple[Key, ...]] = {
         Key("after", "str", "delete", "After a push: `delete` the local file, `archive` it, or `keep` it (a ledger remembers it)."),
         Key("archive_dir", "str", None, "With after = \"archive\": where pushed files go. Relative to the watch directory."),
         Key("keep_for", "duration", 7 * 86400.0, "With after = \"archive\": delete archived files after this long."),
+        Key(
+            "reachable_probe",
+            "str",
+            "tcp",
+            "`tcp` (host:port accepts a TCP connection) or `banner` (it also sends an SSH banner within "
+            "`reachable_timeout`: use it when a VPN or tunnel accepts TCP while the far side is not usable yet).",
+        ),
         Key("reachable_host", "str", None, "Host to probe before pushing (default: the host in `dest`; set it when `dest` uses a Host alias)."),
         Key("reachable_port", "int", None, "Port to probe (default: `port`, else 22)."),
         Key("reachable_timeout", "duration", 5.0, "How long the probe waits. No answer means unknown: files wait, nothing fails."),
@@ -530,7 +537,7 @@ _RECIPE_REQUIRED = {
     "mirror": ("direction", "remote", "remote_dir", "local_dir"),
 }
 _RECIPE_PATHS = ("local_dir", "identity", "known_hosts", "archive_dir")
-_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "on_missing": ON_MISSING, "direction": DIRECTIONS}
+_RECIPE_CHOICES = {"protocol": PROTOCOLS, "marker": MARKERS, "after": RECIPE_AFTER, "on_conflict": CONFLICTS, "on_missing": ON_MISSING, "direction": DIRECTIONS, "reachable_probe": PROBES}
 
 
 def _conpty_problems(collector: _Collector, values: Mapping[str, Any]) -> None:

@@ -317,3 +317,20 @@ def test_the_delete_helper_speaks_posix_paths_and_asks_for_a_verified_delete(tmp
     assert options["mode"] == "delete" and options["dir"] == "/data/out"
     [item] = options["files"]
     assert (item["path"], item["size"], item["sha256"]) == ("/data/out/a b.tar.gz", 7, "a" * 64)
+
+
+def test_an_identical_existing_file_is_reported_as_verified_not_pulled(make_watch, server, tmp_path, xdg):
+    """A no-op must not claim a transfer (issue 40): no 'pulling', no 'pulled ... in Ns'."""
+    (server.root / "a.tar.gz").write_bytes(b"data")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "a.tar.gz").write_bytes(b"data")
+    watch = load_watch_config(pull_watch(make_watch, server, tmp_path))
+    records = []
+    report = engine(xdg, records).poll(watch, WatchState(False), events=[file_event("a.tar.gz", b"data")])
+    assert not report.failed, records
+    headlines = [r["message"] for r in records if r["event"] == "plugin.event"]
+    assert any(m.startswith("a.tar.gz already present, verified (size and sha256 match); nothing transferred")
+               for m in headlines), headlines
+    assert not any(m.startswith("pulling a.tar.gz") for m in headlines), headlines
+    assert not any(m.startswith("pulled a.tar.gz") for m in headlines), headlines

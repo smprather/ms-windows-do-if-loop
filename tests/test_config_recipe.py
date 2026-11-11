@@ -61,7 +61,7 @@ def test_push_recipe_settings_and_observer(make_watch):
     settings = config.settings
     assert (settings["dest"], settings["password_env"], settings["protocol"]) == ("me@linux2:incoming/", "RELAY_PASSWORD", "scp")
     assert (settings["marker"], settings["after"], settings["keep_for"], settings["reachable_timeout"]) == ("sha256", "delete", 7 * 86400.0, 5.0)
-    assert (settings["reachable_host"], settings["reachable_port"]) == (None, None)
+    assert (settings["reachable_host"], settings["reachable_port"], settings["reachable_probe"]) == (None, None, "tcp")
     [observer] = config.observers.values()
     assert (observer.name, observer.kind, observer.path) == ("local", "files", config.watch_dir / "staging")
 
@@ -69,6 +69,11 @@ def test_push_recipe_settings_and_observer(make_watch):
 def test_unknown_recipe(make_watch):
     [problem] = problems(make_watch, 'recipe = "relay"\n')
     assert "'recipe' must be one of pull, push, mirror, got 'relay'" in problem
+
+
+def test_reachable_probe_must_be_a_choice(make_watch):
+    found = problems(make_watch, PUSH + 'reachable_probe = "ping"\n')
+    assert any("'reachable_probe' must be one of tcp, banner" in problem for problem in found)
 
 
 MIRROR = """

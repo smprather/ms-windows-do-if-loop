@@ -31,6 +31,7 @@ At least one side must be remote. **Two remote endpoints** (copying linux1 → l
 | `ctx.transfer.pull(remote, local_dir, size=, sha256=, on_conflict=)` | `watchglass kit pull REMOTE DIR [--size N] [--sha256 HEX] [--on-conflict …]` | Copies to `DIR/.NAME.part`, checks size and sha256 when given, then renames to `DIR/NAME`. A failed check deletes the part file, so a half or wrong file never appears under its real name. Returns / prints the final path. `resume = true` is refused without `protocol = "sftp"` and a `sha256`: sftp's `reget` is what continues the partial, and only the sha256 proves the resumed bytes are the file that was asked for. |
 | `ctx.transfer.push(path, remote_dir, marker=)` | `watchglass kit push PATH REMOTE_DIR [--marker sha256\|none]` | Uploads `NAME`, then, once that succeeded, `NAME.sha256` in `sha256sum` format. Returns / prints the remote path. |
 | `ctx.transfer.tcp_open(host, port=22, timeout=5)` | `watchglass kit tcp-open HOST [--port N]` | Whether the port accepts a TCP connection (exit 0 open, 1 closed). Allowed in a check. |
+| `ctx.transfer.ssh_probe(host, port=22, timeout=5)` | — | Whether TCP connected and which SSH banner arrived within the timeout (`banner is None` means the connection was accepted but no SSH server answered yet). Allowed in a check; the `push` recipe's `reachable_probe = "banner"` uses it. |
 
 `pull` when `DIR/NAME` already exists: with `sha256` given and matching, nothing is copied (an earlier pull finished); otherwise it fails unless `on_conflict = "rename"` (`NAME-1.ext`) or `"overwrite"`.
 

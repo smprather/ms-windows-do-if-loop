@@ -85,7 +85,7 @@ def push_settings(tmp_path):
         "dest": "u@host:/in", "local_dir": str(stage), "settle": 0.0, "pattern": "*", "ignore": [],
         "after": "delete", "archive_dir": str(tmp_path / "archive"), "keep_for": 0.0,
         "marker": "sha256", "resume": False, "reachable_host": None, "reachable_port": None,
-        "reachable_timeout": 5.0,
+        "reachable_timeout": 5.0, "reachable_probe": "tcp",
     })
 
 

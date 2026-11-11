@@ -786,3 +786,41 @@ def test_transfer_env_reads_the_windows_registry(monkeypatch):
     monkeypatch.setattr(transfer.platform, "hot_environment", lambda: {"RELAY_PASSWORD": "hot"})
     with transfer._transfer_env(ScpOptions(password_env="RELAY_PASSWORD")) as env:
         assert env["RELAY_PASSWORD"] == "hot"
+
+
+def test_probe_ssh_requires_an_ssh_banner():
+    """TCP-only is not enough: a link can accept the handshake and never send a banner (issue 41)."""
+    import contextlib
+    import socket
+    import threading
+
+    @contextlib.contextmanager
+    def listening(banner: bytes | None):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        if banner is not None:
+            def send():
+                with contextlib.suppress(OSError):
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.sendall(banner)
+            threading.Thread(target=send, daemon=True).start()
+        try:
+            yield port
+        finally:
+            listener.close()
+
+    with listening(b"SSH-2.0-Test\r\n") as port:
+        assert transfer.probe_ssh("127.0.0.1", port, timeout=2) == transfer.SshProbe(True, "SSH-2.0-Test")
+    with listening(b"SSH-1.99-Old\r\n") as port:
+        assert transfer.probe_ssh("127.0.0.1", port, timeout=2) == transfer.SshProbe(True, "SSH-1.99-Old")
+    with listening(b"HTTP/1.1 400 Bad Request\r\n") as port:
+        assert transfer.probe_ssh("127.0.0.1", port, timeout=2) == transfer.SshProbe(True, None)
+    with listening(None) as port:
+        assert transfer.probe_ssh("127.0.0.1", port, timeout=0.2) == transfer.SshProbe(True, None)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed = probe.getsockname()[1]
+    assert transfer.probe_ssh("127.0.0.1", closed, timeout=2) == transfer.SshProbe(False, None)

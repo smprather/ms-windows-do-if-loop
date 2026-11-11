@@ -35,6 +35,7 @@ PROTOCOLS = ("scp", "sftp")
 PASSWORD_MODES = ("askpass", "conpty")
 CONFLICTS = ("skip-identical", "rename", "overwrite")
 MARKERS = ("sha256", "none")
+PROBES = ("tcp", "banner")
 SCP_DEFAULTS = (
     "-o",
     "StrictHostKeyChecking=yes",
@@ -108,6 +109,7 @@ def _operand(end: Endpoint, *, classic: bool, source: bool) -> str:
 
 
 Report = Callable[[list[str], int | None, bool, float, str, str], None]
+Skip = Callable[[Path], None]
 
 
 class TransferFailed(Exception):
@@ -920,13 +922,16 @@ def pull(
     resume: bool = False,
     report: Report | None = None,
     warn: Callable[[str], None] | None = None,
+    on_skip: Skip | None = None,
 ) -> Path:
     """Copy a remote file into local_dir through .NAME.part, verify size and sha256 when given, rename it (an identical existing file is a no-op).
 
     A partial file from an earlier (killed) attempt is discarded, and `warn` is told how many bytes that cost.
     With `resume` — which needs the sftp protocol and a sha256 — it is continued with sftp's reget instead, and
     kept if this attempt fails; a resumed file that does not verify is pulled again from the start, once. A
-    partial with no known size cannot be continued, so it is discarded as usual.
+    partial with no known size cannot be continued, so it is discarded as usual. When an existing file (or an
+    existing numbered copy, with on_conflict="rename") already matches, nothing is transferred and `on_skip` is
+    told which path was accepted, so a caller can report a no-op instead of a transfer.
     """
     src = _endpoint(remote)
     if not src.remote:
@@ -957,7 +962,9 @@ def pull(
     same = functools.partial(_identical, size=size, sha256=sha256)
     if final.exists():
         if same(final):
-            return final  # an earlier pull of this exact file finished
+            if on_skip is not None:
+                on_skip(final)  # an earlier pull of this exact file finished
+            return final
         if on_conflict == "skip-identical":
             raise TransferFailed(
                 f"{final} already exists with other or unknown content; pass sha256 to skip identical files, or "
@@ -966,7 +973,9 @@ def pull(
         if on_conflict == "rename":
             final = _free_name(directory, name, same)
             if final.exists():
-                return final  # a numbered copy of this exact file is already there
+                if on_skip is not None:
+                    on_skip(final)  # a numbered copy of this exact file is already there
+                return final
     part = directory / f".{name}.part"
     kept = part.stat().st_size if part.exists() else 0
     resumable = resume and kept > 0 and size is not None and kept < size
@@ -1104,6 +1113,51 @@ def tcp_open(host: str, port: int = 22, timeout: float = 5.0) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class SshProbe:
+    """What a pre-flight probe found: whether TCP connected (`connected`) and the SSH identification line (`banner`).
+
+    A link can accept the TCP handshake and then never send an SSH banner (a VPN endpoint that is up while the
+    far side is not). That is `connected=True, banner=None`: not usable yet, but not a failed transfer either.
+    """
+
+    connected: bool
+    banner: str | None
+
+
+def probe_ssh(host: str, port: int = 22, timeout: float = 5.0) -> SshProbe:
+    """Connect to host:port, read up to 255 bytes of its SSH banner within `timeout`, and close (no auth).
+
+    The banner must start with `SSH-2.0-` or `SSH-1.` and end at the first newline. A refused connection is
+    `connected=False`; a connection whose banner did not arrive in time (or was not an SSH banner) is
+    `connected=True, banner=None`.
+    """
+    deadline = time.monotonic() + max(timeout, 0.0)
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return SshProbe(False, None)
+    with sock:
+        data = b""
+        try:
+            while len(data) < 255:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                sock.settimeout(left)
+                chunk = sock.recv(255 - len(data))
+                if not chunk:
+                    break
+                data += chunk
+                if b"\n" in data:
+                    break
+        except OSError:
+            pass
+    line = data.split(b"\n", 1)[0].rstrip(b"\r")
+    banner = line.decode("ascii", "replace") if line.startswith((b"SSH-2.0-", b"SSH-1.")) else None
+    return SshProbe(True, banner)
+
+
 class Transfer:
     """Transfers for hooks, as `ctx.transfer`: relative local paths start at the watch directory, every scp run
     is logged as a `command` record (like ctx.run), and the hook's remaining time caps `timeout`.
@@ -1184,6 +1238,7 @@ class Transfer:
         sha256: str | None = None,
         on_conflict: str = "skip-identical",
         resume: bool = False,
+        on_skip: Skip | None = None,
         **options: Any,
     ) -> Path:
         """Copy `remote` into local_dir through `.NAME.part`, verify size/sha256 when given, rename; returns the path.
@@ -1191,14 +1246,15 @@ class Transfer:
         An existing file with the given sha256 makes this a no-op; any other existing file is an error unless
         on_conflict is "rename" (NAME-1.ext) or "overwrite". With `resume` (needs protocol="sftp" and a
         sha256) an unfinished `.NAME.part` is continued with sftp's reget instead of starting over; without a
-        known size there is nothing to continue from, so it starts over.
+        known size there is nothing to continue from, so it starts over. When the pull is a no-op, `on_skip` is
+        called with the existing path that already matched, so the caller can say nothing was transferred.
         """
         scp = self._options(options)
         directory = Path(local_dir)
         if not directory.is_absolute():
             directory = self._base / directory
         return pull(remote, directory, size=size, sha256=sha256, on_conflict=on_conflict, options=scp,
-                    resume=resume, warn=self._warn, report=self._report)
+                    resume=resume, warn=self._warn, report=self._report, on_skip=on_skip)
 
     def push(self, path: str | os.PathLike[str], remote_dir: str, *, marker: str = "sha256", resume: bool = False,
              **options: Any) -> str:
@@ -1218,3 +1274,13 @@ class Transfer:
         if self._remaining is not None:
             timeout = max(min(timeout, self._remaining()), 0.1)
         return tcp_open(host, port, timeout)
+
+    def ssh_probe(self, host: str, port: int = 22, timeout: float = 5.0) -> SshProbe:
+        """Whether host:port accepts TCP and which SSH banner it sends within `timeout` (allowed in a check).
+
+        Use this instead of `tcp_open` when a link can accept TCP while the far side is not usable yet: a
+        `connected` probe with `banner is None` means no SSH server answered, so a transfer should wait.
+        """
+        if self._remaining is not None:
+            timeout = max(min(timeout, self._remaining()), 0.1)
+        return probe_ssh(host, port, timeout)
