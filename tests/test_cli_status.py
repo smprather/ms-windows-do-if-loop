@@ -129,3 +129,29 @@ def test_a_refused_rename_migration_is_a_clean_cli_error(xdg):
     assert result.exit_code == 1
     assert "old keepwatch service is running" in text
     assert "Traceback" not in text
+
+
+def test_status_says_waiting_when_the_last_poll_was_unknown(xdg, make_watch):
+    """Issue 42: an unreachable destination is waiting, not online, and its reason is visible."""
+    make_watch("relay-push", config='[hooks]\ncheck = ["true"]\n')
+    reason = "oa97ut01:222 is not reachable; files wait in C:/relay/staging"
+    write_json_atomic(xdg.status_file, {
+        "format": 1,
+        "service": {"running": True, "pid": 4711, "version": "2026.11.11", "started": iso_time(time.time() - 60),
+                    "updated": iso_time(time.time()), "config": "x", "config_error": None, "only": []},
+        "watches": {"relay-push": {
+            "description": "x", "watch_dir": "/w/relay-push", "enabled": True, "interval": 30.0,
+            "condition": False, "failures": 0, "offline": None,
+            "last_poll": {"poll_id": "p1", "at": iso_time(time.time() - 70), "outcome": "unknown",
+                          "reason": reason, "failed": False, "trial": False, "results": []},
+            "next_poll": iso_time(time.time() + 230), "config_error": None, "pending_events": 0,
+            "observers": {}, "in_flight": None, "transfer": None,
+        }},
+        "invalid_watches": {}, "problems": [],
+    })
+    ensure_private_dir(xdg.runtime)
+    with hold_lock(xdg.service_lock):
+        result = run("status")
+    assert result.exit_code == 0
+    assert re.search(r"^relay-push\s+waiting\s+condition FALSE", result.output, re.M)
+    assert f"waiting: {reason}" in result.output

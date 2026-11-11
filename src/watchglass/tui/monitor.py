@@ -20,7 +20,7 @@ from watchglass.durations import format_duration
 from watchglass.logquery import LogFilter, follow_log, select_records
 from watchglass.output import NORMAL, format_record, record_level, sanitize
 from watchglass.paths import Paths
-from watchglass.statusview import collect_status, read_status, service_running
+from watchglass.statusview import collect_status, read_status, service_running, watch_state
 
 STALE_AFTER = 5.0  # two missed service ticks: the status is no longer live
 DISCOVERY_EVERY = 5.0  # how often the config on disk is re-read
@@ -28,6 +28,7 @@ FOLLOW_INTERVAL = 0.5  # the log is checked twice a second, as `watchglass logs 
 
 _STATE_STYLES = {
     "online": "green",
+    "waiting": "yellow",
     "polling": "yellow",
     "transferring": "cyan",
     "offline": "red",
@@ -253,7 +254,7 @@ class Monitor:
         merged_dir, config_error = merged.get("watch_dir"), merged.get("config_error")
         last_poll, next_poll = merged.get("last_poll"), merged.get("next_poll")
         offline, in_flight, activity = merged.get("offline"), merged.get("in_flight"), merged.get("transfer")
-        state = _state(merged, poll)
+        state = watch_state(merged, in_flight=poll is not None)
         return WatchRow(
             name=name,
             state=state,
@@ -363,20 +364,6 @@ def _whole(seconds: float) -> int:
     return max(int(seconds), 0)  # pi-lens-ignore: unchecked-numeric-parse-python -- a float this module computed
 
 
-def _state(entry: dict[str, Any], poll: InFlight | None) -> str:
-    if entry.get("offline"):
-        return "offline"
-    enabled = entry.get("enabled")
-    if isinstance(enabled, bool) and not enabled:
-        return "parked"
-    if entry.get("in_flight") or poll is not None:
-        return "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
-    known = entry.get("known_to_service")
-    if isinstance(known, bool) and not known:
-        return "idle"
-    return "online"
-
-
 def _note(entry: dict[str, Any], state: str) -> str:
     if entry.get("config_error"):
         return f"config error: {_first_line(entry['config_error'])}"
@@ -390,6 +377,10 @@ def _note(entry: dict[str, Any], state: str) -> str:
             return "offline by user"
         if offline.get("permanent"):
             return "permanent: fix it, then watchglass enable"
+    if state == "waiting":
+        last = entry.get("last_poll")
+        reason = last.get("reason") if isinstance(last, dict) else None
+        return sanitize(f"waiting: {reason}") if isinstance(reason, str) and reason else "waiting"
     if pending > 0:
         return f"+{pending} events"
     if state == "transferring":

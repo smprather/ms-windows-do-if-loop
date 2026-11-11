@@ -439,3 +439,34 @@ def test_the_transfer_line_shortens_the_home_directory(monkeypatch):
     line = pane_header_text(None, transfer_now={"name": "a", "part": "/home/me/relay/.a.part"}, now=1000.0)
     assert "~/relay/.a.part" in line
     assert "/home/me" not in line
+
+
+def test_an_unknown_poll_is_waiting_with_its_reason(xdg, make_watch):
+    """Issue 42: 'online' must not hide a destination the last poll could not reach."""
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    reason = "oa97ut01:222 is not reachable; files wait in C:/relay/staging"
+    publish(xdg, status_document(watches={"a": entry(
+        condition=False,
+        last_poll=last_poll(time.time() - 12, outcome="unknown", reason=reason),
+    )}))
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        [row] = monitor.status().watches
+    assert row.state == "waiting"
+    assert monitor_module.note_text(row) == f"waiting: {reason}"
+    assert monitor_module.state_style("waiting") == "yellow"
+
+
+def test_waiting_does_not_override_offline_or_parked(xdg, make_watch):
+    make_watch("a", config='[hooks]\ncheck = ["true"]\n')
+    make_watch("b", config='[hooks]\ncheck = ["true"]\n')
+    unknown = last_poll(time.time() - 12, outcome="unknown", reason="host is not reachable")
+    publish(xdg, status_document(watches={"a": entry(enabled=False, last_poll=unknown), "b": entry(last_poll=unknown)}))
+    write_offline(xdg, "b", OfflineMarker(reason="5 consecutive failed polls", since=iso_time(time.time() - 100)))
+    monitor = Monitor(xdg, xdg.config_file)
+    with running(xdg):
+        monitor.refresh()
+        rows = rows_by_name(monitor.status())
+    assert rows["a"].state == "parked"
+    assert rows["b"].state == "offline"

@@ -14,11 +14,11 @@ up only if an existing field changes meaning, so a consumer can rely on the ones
 - **The banner**: whether the service is running, its pid and version, and how old the status is. When the
   service is not running — or its status is more than a few seconds old — the age is marked stale, `NEXT` shows
   `—` instead of a countdown, and the rest is the last known status.
-- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `polling`, `transferring`, `offline`, `parked`,
-  `idle`, `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`, or
-  `retry …` for an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an
-  invalid config, a config error, a missing directory, orphaned state, queued events, a user-disabled watch —
-  or, while a transfer runs, the file being moved.
+- **The table**: one row per watch. `WATCH`; `STATE` (`online`, `waiting`, `polling`, `transferring`, `offline`,
+  `parked`, `idle`, `invalid`, `orphaned`); `COND`; `FAIL`; `LAST` (outcome and age); `NEXT` (a countdown, `due`,
+  or `retry …` for an offline watch); `OBS` (running observers); and `NOTE`, the first thing that is wrong: an
+  invalid config, a config error, a missing directory, orphaned state, `waiting: <reason>` when the last check
+  answered `unknown`, queued events, a user-disabled watch — or, while a transfer runs, the file being moved.
 - **What is running right now**: the service puts the hook it is running (`in_flight`) and what that hook is
   transferring (`transfer`, with the partial file's size) into `status.json`, so `watchglass status` and this
   monitor show them without reading the log. A long transfer therefore reads `transferring` rather than

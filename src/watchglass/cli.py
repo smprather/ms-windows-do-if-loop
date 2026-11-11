@@ -487,7 +487,8 @@ def run_service(app: App, only: tuple[str, ...], verbose: bool, quiet: bool) -> 
 def status(app: App, name: str | None, as_json: bool) -> None:
     """Show whether the service runs and each watch's state.
 
-    Per watch: online, offline (with the reason and last failure), parked (enabled = false) or idle (the
+    Per watch: online, waiting (the last check answered unknown, e.g. an unreachable destination; its reason
+    is printed below), offline (with the reason and last failure), parked (enabled = false) or idle (the
     service is not running), the TRUE/FALSE condition, consecutive failures, the last poll and the next one.
     Also lists config problems and orphaned state directories (state of a watch that no longer exists).
     The service refreshes this every reload_interval.

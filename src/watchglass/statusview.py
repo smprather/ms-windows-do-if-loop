@@ -87,17 +87,30 @@ def in_flight_text(in_flight: dict[str, Any], activity: dict[str, Any] | None, *
     return text
 
 
-def _watch_line(name: str, entry: dict[str, Any], now: float) -> str:
+def watch_state(entry: dict[str, Any], *, in_flight: bool = False) -> str:
+    """The one state label for a watch entry, shared by `watchglass status` and the TUI.
+
+    Precedence: offline (a marker), parked (enabled = false), transferring/polling, idle (the service does not
+    know the watch), waiting (its last poll answered `unknown`, e.g. the destination is unreachable) and online.
+    """
     if entry.get("offline"):
-        label = "offline"
-    elif isinstance(entry.get("enabled"), bool) and not entry["enabled"]:
-        label = "parked"
-    elif isinstance(entry.get("known_to_service"), bool) and not entry["known_to_service"]:
-        label = "idle"
-    elif entry.get("in_flight"):
-        label = "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
-    else:
-        label = "online"
+        return "offline"
+    enabled = entry.get("enabled")
+    if isinstance(enabled, bool) and not enabled:
+        return "parked"
+    if entry.get("in_flight") or in_flight:
+        return "transferring" if isinstance(entry.get("transfer"), dict) else "polling"
+    known = entry.get("known_to_service")
+    if isinstance(known, bool) and not known:
+        return "idle"
+    last = entry.get("last_poll")
+    if isinstance(last, dict) and last.get("outcome") == "unknown":
+        return "waiting"
+    return "online"
+
+
+def _watch_line(name: str, entry: dict[str, Any], now: float) -> str:
+    label = watch_state(entry)
     parts = [f"{name:<20} {label:<12}"]
     if "condition" in entry:
         parts.append(f"condition {'TRUE' if entry['condition'] else 'FALSE'}")
@@ -130,6 +143,11 @@ def format_status(document: dict[str, Any], now: float) -> list[str]:
             path = transfer.activity_path(transfer_now) if isinstance(transfer_now, dict) else None
             if path:
                 lines.append(f"      -> {path}")  # where the bytes are going (issue 31)
+        last = entry.get("last_poll")
+        if isinstance(last, dict) and last.get("outcome") == "unknown":
+            reason = last.get("reason")
+            if isinstance(reason, str) and reason:
+                lines.append(f"    waiting: {reason}")
         offline = entry.get("offline")
         if offline:
             detail = f"    offline since {offline['since']}: {offline['reason']}"

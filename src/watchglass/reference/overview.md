@@ -16,6 +16,7 @@ watchglass is a command-line tool that starts at login and runs in the backgroun
 | service | The long-running `watchglass run` process (started at login by `watchglass install`). |
 | master tick | The service's periodic pass (every `reload_interval`, default 5s) that picks up config changes. |
 | offline | A watch stopped by the failure limit or by `watchglass disable`. |
+| waiting | A live watch whose last poll answered `unknown` (for example, the destination is unreachable); its files or events wait, and nothing fails. |
 | ledger | A persistent, named set of string keys a watch uses to remember what it has done. |
 
 ## How it fits together
